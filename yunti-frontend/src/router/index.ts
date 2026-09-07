@@ -11,6 +11,12 @@ const router = createRouter({
       meta: { title: '登录' },
     },
     {
+      path: '/register',
+      name: 'Register',
+      component: () => import('../views/register/index.vue'),
+      meta: { title: '注册企业账号' },
+    },
+    {
       path: '/',
       component: () => import('../layouts/AdminLayout.vue'),
       redirect: '/dashboard',
@@ -33,7 +39,7 @@ const router = createRouter({
 
 // 简单路由守卫：未登录跳登录页
 router.beforeEach((to) => {
-  if (to.name !== 'Login' && !getToken()) {
+  if (!['Login', 'Register'].includes(String(to.name)) && !getToken()) {
     return { name: 'Login', query: { redirect: to.fullPath } }
   }
   return true

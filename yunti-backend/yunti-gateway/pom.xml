@@ -17,9 +17,10 @@
             <artifactId>yunti-common</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Spring Cloud Gateway（Reactive，Boot 4 采用 server-webflux 模块） -->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-gateway-server-webflux</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

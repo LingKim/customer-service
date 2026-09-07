@@ -4,8 +4,9 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 /**
- * 接入网关（骨架占位）。
- * TODO: 演进为 API Gateway（路由/限流/鉴权）+ WSS 实时网关（长连接），见 system-architecture.md。
+ * 云梯 API 网关（Spring Cloud Gateway / WebFlux）。
+ *
+ * <p>统一入口负责：服务路由、跨域、后续鉴权/限流/审计；当前按前缀路由到各业务服务，
  */
 @SpringBootApplication(scanBasePackages = "cn.net.susan")
 public class GatewayApplication {

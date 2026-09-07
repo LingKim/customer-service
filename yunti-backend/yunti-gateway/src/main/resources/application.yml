@@ -5,8 +5,39 @@ spring:
   application:
     name: yunti-gateway
 
+  # 强制使用 Reactive 容器（Netty），避免与 MVC 容器冲突
+  main:
+    web-application-type: reactive
+
+  cloud:
+    gateway:
+      server:
+        webflux:
+          # 声明式路由：按前缀转发到各业务服务（生产可替换为注册中心 lb://service-id）
+          routes:
+            - id: yunti-user-service
+              uri: ${YUNTI_USER_SERVICE_URL:http://127.0.0.1:9091}
+              predicates:
+                - Path=/api/user/**
+            - id: yunti-tenant-service
+              uri: ${YUNTI_TENANT_SERVICE_URL:http://127.0.0.1:9092}
+              predicates:
+                - Path=/api/tenant/**
+            - id: yunti-customer-service
+              uri: ${YUNTI_CUSTOMER_SERVICE_URL:http://127.0.0.1:9093}
+              predicates:
+                - Path=/api/customer/**
+            - id: yunti-billing-service
+              uri: ${YUNTI_BILLING_SERVICE_URL:http://127.0.0.1:9094}
+              predicates:
+                - Path=/api/billing/**
+            - id: yunti-ops-service
+              uri: ${YUNTI_OPS_SERVICE_URL:http://127.0.0.1:9095}
+              predicates:
+                - Path=/api/ops/**
+
 management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,gateway

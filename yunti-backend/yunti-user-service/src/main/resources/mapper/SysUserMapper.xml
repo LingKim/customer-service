@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.user.mapper.SysUserMapper">
+
+    <!-- 按登录账号查询：手机号 / 邮箱 / 用户编号任一匹配 -->
+    <select id="findByAccount" resultType="cn.net.susan.user.entity.SysUser">
+        SELECT id, tenant_code, user_no, name, phone, email, password, avatar,
+               user_type, status, last_login_time, create_time, update_time,
+               creator, editor, is_deleted
+          FROM sys_user
+         WHERE is_deleted = FALSE
+           AND (user_no = #{account}
+                OR lower(phone) = lower(#{account})
+                OR lower(email) = lower(#{account}))
+         ORDER BY id
+         LIMIT 1
+    </select>
+    <!-- 判断手机号或邮箱是否已被注册 -->
+    <select id="countByPhoneOrEmail" resultType="int">
+        SELECT COUNT(1)
+          FROM sys_user
+         WHERE is_deleted = FALSE
+           AND (lower(phone) = lower(#{phone}) OR lower(email) = lower(#{email}))
+    </select>
+</mapper>
