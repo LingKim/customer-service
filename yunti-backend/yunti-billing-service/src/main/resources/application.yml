@@ -1,0 +1,12 @@
+server:
+  port: 9094
+
+spring:
+  application:
+    name: yunti-billing-service
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

@@ -1,0 +1,12 @@
+server:
+  port: 9092
+
+spring:
+  application:
+    name: yunti-tenant-service
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

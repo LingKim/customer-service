@@ -1,0 +1,12 @@
+server:
+  port: 9095
+
+spring:
+  application:
+    name: yunti-ops-service
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
