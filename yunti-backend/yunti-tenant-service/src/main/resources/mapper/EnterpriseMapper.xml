@@ -13,6 +13,18 @@
          ORDER BY id DESC
          LIMIT 1
     </select>
+    <!-- 审核提交事务内加行锁，避免并发重提产生相同 version_no -->
+    <select id="findByApplicantIdForUpdate" resultType="cn.net.susan.tenant.entity.Enterprise">
+        SELECT id, enterprise_code, tenant_code, company_name, industry, scale,
+               license_no, register_address, legal_person, license_file_id,
+               contact_name, contact_phone, contact_email, status,
+               create_time, update_time, creator, editor, is_deleted
+          FROM enterprise
+         WHERE is_deleted = FALSE AND creator = #{applicantId}
+         ORDER BY id DESC
+         LIMIT 1
+           FOR UPDATE
+    </select>
     <!-- 查询指定日期前缀下最新企业编码（含逻辑删除，避免编码复用冲突） -->
     <select id="findLatestCodeByDatePrefix" resultType="java.lang.String">
         SELECT enterprise_code

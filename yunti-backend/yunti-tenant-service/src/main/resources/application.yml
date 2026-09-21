@@ -20,12 +20,9 @@ yunti:
   auth:
     # JWT 签名密钥：与 user-service 保持一致，生产必须通过环境变量覆盖
     jwt-secret: ${YUNTI_JWT_SECRET:yunti-customer-service-jwt-secret-please-change-in-prod-0123456789}
-  user:
-    # user-service 内部接口地址（审核通过后回填 sys_user.tenant_code）
-    internal-base-url: ${YUNTI_USER_INTERNAL_URL:http://127.0.0.1:9091}
-  demo:
-    # 本地演示：企业用户可在引导页一键模拟审核通过；生产必须置 false
-    approve-enabled: ${YUNTI_DEMO_APPROVE_ENABLED:true}
+  customer:
+    # customer-service 内部接口地址（提交审核前校验营业执照文件归属）
+    internal-base-url: ${YUNTI_CUSTOMER_INTERNAL_URL:http://127.0.0.1:9093}
 
 management:
   endpoints:

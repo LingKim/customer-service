@@ -113,12 +113,12 @@ public class AuthService {
                     )
             );
             return new RegisterResponse(
-                    userId,
+                    String.valueOf(userId),
                     userNo,
                     user.getName(),
                     phone,
                     email,
-                    draft.enterpriseId(),
+                    String.valueOf(draft.enterpriseId()),
                     draft.enterpriseCode(),
                     draft.status(),
                     AuthConstants.TENANT_CODE_PLATFORM,
@@ -170,7 +170,7 @@ public class AuthService {
         ));
         return new LoginResponse(
                 token,
-                user.getId(),
+                String.valueOf(user.getId()),
                 user.getUserNo(),
                 user.getName(),
                 user.getUserType(),

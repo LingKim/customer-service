@@ -7,6 +7,7 @@ import cn.net.susan.common.exception.BizException;
 import cn.net.susan.user.dto.CaptchaResponse;
 import cn.net.susan.user.dto.LoginRequest;
 import cn.net.susan.user.dto.LoginResponse;
+import cn.net.susan.user.dto.MeResponse;
 import cn.net.susan.user.dto.RegisterRequest;
 import cn.net.susan.user.dto.RegisterResponse;
 import cn.net.susan.user.mapper.SysUserMapper;
@@ -102,12 +103,12 @@ public class AuthController {
      * 当前登录用户（前端进入后台后用于恢复会话）。
      */
     @GetMapping("/me")
-    public ApiResponse<LoginUser> me(@RequestHeader(value = "Authorization", required = false) String authorization) {
+    public ApiResponse<MeResponse> me(@RequestHeader(value = "Authorization", required = false) String authorization) {
         LoginUser loginUser = jwtService.parseToken(resolveBearer(authorization));
         if (sysUserMapper.findByAccount(loginUser.userNo()) == null) {
             throw new BizException(ResultCode.UNAUTHORIZED);
         }
-        return ApiResponse.ok(loginUser);
+        return ApiResponse.ok(MeResponse.from(loginUser));
     }
 
     /**

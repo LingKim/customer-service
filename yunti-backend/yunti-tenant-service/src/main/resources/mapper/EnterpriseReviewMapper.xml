@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.tenant.mapper.EnterpriseReviewMapper">
+
+    <select id="findLatestByEnterpriseId" resultType="cn.net.susan.tenant.entity.EnterpriseReview">
+        SELECT id, enterprise_id, tenant_code, apply_no, version_no, applicant_id,
+               company_name, industry, scale, contact_name, contact_phone,
+               contact_email, license_no, register_address, legal_person,
+               license_file_id, status, reviewer_id, review_time, reject_reason,
+               submit_time, create_time, update_time, creator, editor, is_deleted
+          FROM enterprise_review
+         WHERE enterprise_id = #{enterpriseId} AND is_deleted = FALSE
+         ORDER BY version_no DESC
+         LIMIT 1
+    </select>
+
+    <select id="nextVersionNo" resultType="int">
+        SELECT COALESCE(MAX(version_no), 0) + 1
+          FROM enterprise_review
+         WHERE enterprise_id = #{enterpriseId} AND is_deleted = FALSE
+    </select>
+</mapper>

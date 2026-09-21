@@ -4,6 +4,43 @@ server:
 spring:
   application:
     name: yunti-customer-service
+  datasource:
+    url: jdbc:postgresql://${YUNTI_DB_HOST:127.0.0.1}:${YUNTI_DB_PORT:5432}/${YUNTI_CUSTOMER_DB:customer_db}
+    username: ${YUNTI_DB_USER:mac}
+    password: ${YUNTI_DB_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 3000
+
+yunti:
+  id:
+    worker-id: ${YUNTI_WORKER_ID:3}
+  auth:
+    jwt-secret: ${YUNTI_JWT_SECRET:yunti-customer-service-jwt-secret-please-change-in-prod-0123456789}
+  file:
+    storage:
+      type: ${YUNTI_FILE_STORAGE_TYPE:local}
+      local-dir: ${YUNTI_FILE_LOCAL_DIR:/tmp/yunti-files}
+      max-size: ${YUNTI_FILE_MAX_SIZE:10485760}
+      rustfs:
+        endpoint: ${YUNTI_RUSTFS_ENDPOINT:127.0.0.1}
+        port: ${YUNTI_RUSTFS_PORT:9000}
+        access-key: ${YUNTI_RUSTFS_ACCESS_KEY:}
+        secret-key: ${YUNTI_RUSTFS_SECRET_KEY:}
+        bucket: ${YUNTI_RUSTFS_BUCKET:yunti}
+        secure: ${YUNTI_RUSTFS_SECURE:false}
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    banner: false
+    db-config:
+      id-type: input
 
 management:
   endpoints:

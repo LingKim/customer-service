@@ -17,6 +17,11 @@ public interface EnterpriseMapper extends BaseMapper<Enterprise> {
     Enterprise findByApplicantId(@Param("applicantId") String applicantId);
 
     /**
+     * 提交审核时锁定企业行，串行化同一企业的版本号计算与写入。
+     */
+    Enterprise findByApplicantIdForUpdate(@Param("applicantId") String applicantId);
+
+    /**
      * 查询指定日期前缀下最新企业编码（含逻辑删除，避免编码复用冲突）。
      */
     String findLatestCodeByDatePrefix(@Param("datePrefix") String datePrefix);

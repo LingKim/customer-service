@@ -15,12 +15,12 @@ package cn.net.susan.user.dto;
  * @param userType         用户类型码：2-企业账号
  */
 public record RegisterResponse(
-        long userId,
+        String userId,
         String userNo,
         String contactName,
         String phone,
         String email,
-        long enterpriseId,
+        String enterpriseId,
         String enterpriseCode,
         int enterpriseStatus,
         String tenantCode,

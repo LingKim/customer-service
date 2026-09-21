@@ -18,7 +18,7 @@ export interface LoginParams {
 /** 登录返回 */
 export interface LoginResult {
   token: string
-  userId: number
+  userId: string
   userNo: string
   name: string
   userType: number
@@ -48,12 +48,12 @@ export interface RegisterParams {
 
 /** 企业账号注册返回 */
 export interface RegisterResult {
-  userId: number
+  userId: string
   userNo: string
   contactName: string
   phone: string
   email: string
-  enterpriseId: number
+  enterpriseId: string
   enterpriseCode: string
   enterpriseStatus: number
   tenantCode: string
@@ -62,7 +62,7 @@ export interface RegisterResult {
 
 /** /user/auth/me 返回的登录用户信息（JWT 载荷） */
 export interface MeResult {
-  userId: number
+  userId: string
   userNo: string
   name: string
   userType: number
@@ -71,17 +71,17 @@ export interface MeResult {
 
 /** 企业开通引导状态 */
 export interface EnterpriseGuideState {
-  enterpriseId: number
+  enterpriseId: string
   enterpriseCode: string
   /** PENDING_PROFILE / PENDING_REVIEW / REJECTED / APPROVED */
-  stage: string
+  stage: 'PENDING_PROFILE' | 'PENDING_REVIEW' | 'REJECTED' | 'APPROVED'
   companyName?: string
   industry?: string
   scale?: string
   licenseNo?: string
   registerAddress?: string
   legalPerson?: string
-  licenseFileId?: number | null
+  licenseFileId?: string | null
   contactName?: string
   contactPhone?: string
   contactEmail?: string
@@ -90,7 +90,6 @@ export interface EnterpriseGuideState {
   rejectReason?: string
   submitTime?: string
   tenantCode?: string
-  demoApproveEnabled: boolean
 }
 
 /** 企业资料提交参数 */
@@ -101,7 +100,7 @@ export interface EnterpriseProfilePayload {
   licenseNo: string
   registerAddress: string
   legalPerson: string
-  licenseFileId: number
+  licenseFileId: string
   contactName: string
   contactPhone: string
   contactEmail: string
@@ -109,9 +108,10 @@ export interface EnterpriseProfilePayload {
 
 /** 营业执照上传结果 */
 export interface LicenseUploadResult {
-  fileId: number
+  fileId: string
   fileName: string
   fileSize: number
+  mimeType?: string
 }
 
 /** 修改密码参数 */

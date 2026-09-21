@@ -18,11 +18,11 @@ function mockLogin(params: LoginParams): Promise<LoginResult> {
       if (params.account && params.password.length >= 6) {
         resolve({
           token: 'mock-token-' + Date.now(),
-          userId: 1,
+          userId: '325036800000001001',
           userNo: 'U00000000000000001',
           name: '张伟',
-          userType: 1,
-          tenantCode: 'T202609020001',
+          userType: 2,
+          tenantCode: 'PLATFORM',
         })
       } else {
         reject(new Error('账号或密码错误'))
@@ -62,6 +62,15 @@ export function loginApi(data: LoginParams): Promise<LoginResult> {
 
 /** 当前登录用户（恢复会话 / 判断引导状态） */
 export function meApi(): Promise<MeResult> {
+  if (USE_MOCK) {
+    return Promise.resolve({
+      userId: '325036800000001001',
+      userNo: 'U00000000000000001',
+      name: '张伟',
+      userType: 2,
+      tenantCode: 'PLATFORM',
+    })
+  }
   return request<MeResult>({
     url: '/user/auth/me',
     method: 'get',

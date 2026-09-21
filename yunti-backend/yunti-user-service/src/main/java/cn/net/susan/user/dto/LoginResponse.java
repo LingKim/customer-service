@@ -5,7 +5,7 @@ package cn.net.susan.user.dto;
  */
 public record LoginResponse(
         String token,
-        long userId,
+        String userId,
         String userNo,
         String name,
         int userType,

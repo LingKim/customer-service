@@ -6,7 +6,7 @@ import type { LoginParams, LoginResult } from '../types'
 interface UserState {
   token: string
   name: string
-  userId: number
+  userId: string
   userNo: string
   userType: number
   tenantCode: string
@@ -16,7 +16,7 @@ export const useUserStore = defineStore('user', {
   state: (): UserState => ({
     token: getToken(),
     name: '',
-    userId: 0,
+    userId: '',
     userNo: '',
     userType: 0,
     tenantCode: '',
@@ -61,7 +61,7 @@ export const useUserStore = defineStore('user', {
     reset() {
       this.token = ''
       this.name = ''
-      this.userId = 0
+      this.userId = ''
       this.userNo = ''
       this.userType = 0
       this.tenantCode = ''

@@ -17,6 +17,10 @@
           <el-icon><DataBoard /></el-icon>
           <span>数据概览</span>
         </el-menu-item>
+        <el-menu-item index="/enterprise">
+          <el-icon><OfficeBuilding /></el-icon>
+          <span>企业信息</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
@@ -47,16 +51,34 @@
   </el-container>
 </template>
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { getEnterpriseGuide } from '../api/enterprise'
 import { useUserStore } from '../stores/user'
 
 const router = useRouter()
 const userStore = useUserStore()
+const DONE_KEY = 'yunti_onboard_done'
+
+onMounted(async () => {
+  try {
+    if (!userStore.userId) await userStore.fetchProfile()
+    if (userStore.userType === 1) return
+    const guide = await getEnterpriseGuide()
+    const done = localStorage.getItem(DONE_KEY) === 'true'
+    if ((guide.stage !== 'APPROVED' || !done) && router.currentRoute.value.name !== 'EnterpriseReview') {
+      await router.replace('/guide')
+    }
+  } catch {
+    // 状态查询失败时保留页面，由具体功能页呈现错误。
+  }
+})
 
 async function handleCommand(command: string | number | object) {
   if (command === 'logout') {
     await userStore.logout()
+    localStorage.removeItem(DONE_KEY)
     ElMessage.success('已退出登录')
     router.push('/login')
   } else if (command === 'profile') {

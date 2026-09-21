@@ -27,7 +27,19 @@ const router = createRouter({
           component: () => import('../views/dashboard/index.vue'),
           meta: { title: '数据概览' },
         },
+        {
+          path: 'enterprise',
+          name: 'EnterpriseReview',
+          component: () => import('../views/enterprise/index.vue'),
+          meta: { title: '企业信息' },
+        },
       ],
+    },
+    {
+      path: '/guide',
+      name: 'Guide',
+      component: () => import('../views/guide/index.vue'),
+      meta: { title: '企业开通引导' },
     },
     {
       path: '/:pathMatch(.*)*',
