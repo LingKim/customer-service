@@ -41,7 +41,9 @@ complexity: L4
 - .cap/spec.md
 - .cap/plan.md
 - .cap/STATE.md
+- .cap/experience.md
 - .cap/verify/chapter-08-worktree.md
+- .cap/verify/summary.md
 - schema/tenant_db.sql
 - schema/customer_db.sql
 - yunti-backend/yunti-user-service/**
@@ -64,4 +66,4 @@ complexity: L4
 - 2026-09-21 审核提交通过 enterprise 行锁串行化版本号计算。
 
 ## Next action
--> 等待用户决定是否提交；未经授权不 commit / push，不执行 DDL
+-> 推送 chapter/08-enterprise-profile 到 origin；不执行 DDL

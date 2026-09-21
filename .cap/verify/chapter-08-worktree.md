@@ -3,7 +3,8 @@
 - verified-at: 2026-09-21T13:31:48Z
 - branch: chapter/08-enterprise-profile
 - base-commit: 00f4e4d8c68332bd41f33a510f486358a2027440
-- scope: 未提交工作树，仅本地验证，不代表 Server Gate
+- source-commit: 5eefa70565135372d5446cfab61c78dd4a3a1d02
+- scope: 本地验证，不代表 Server Gate
 
 ## 自动测试
 
@@ -32,4 +33,4 @@
 - 数据库 DDL 仅生成，未执行。
 - 未连接真实 PostgreSQL 或 RustFS，未做跨服务联调。
 - 未启动服务，未做浏览器 E2E。
-- 未 commit、未 push，因此尚不能生成绑定最终 Commit 的 `.cap/experience.md`。
+- 已形成代码提交，尚未推送时本报告不代表远端可见或 Server Gate。
