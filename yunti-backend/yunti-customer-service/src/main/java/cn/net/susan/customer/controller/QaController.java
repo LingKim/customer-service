@@ -85,7 +85,9 @@ public class QaController {
                 body.aiScore(),
                 body.riskLevel(),
                 body.comment(),
-                body.ruleNames()
+                body.ruleNames(),
+                body.transcript(),
+                authorization
         ));
     }
 
@@ -120,7 +122,7 @@ public class QaController {
             @Valid @RequestBody AiBatchBody body
     ) {
         LoginUser user = jwtTokenParser.requireLoginUser(authorization);
-        return ApiResponse.ok(qaService.batchAiCheck(user, body.taskNos()));
+        return ApiResponse.ok(qaService.batchAiCheck(user, body.taskNos(), authorization));
     }
 
     @GetMapping("/rules")
@@ -241,7 +243,10 @@ public class QaController {
             @Size(max = 512, message = "质检备注最长 512 个字符")
             String comment,
 
-            List<@Size(max = 64) String> ruleNames
+            List<@Size(max = 64) String> ruleNames,
+
+            @Size(max = 20000, message = "会话文本最长 20000 字符")
+            String transcript
     ) {
     }
 }

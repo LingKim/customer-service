@@ -8,7 +8,7 @@
       <el-button @click="refresh">刷新</el-button>
     </header>
 
-    <el-alert title="当前尚未接入真实会话数据。演示扫描和批量初检使用模拟评分，不能作为正式质检结论。" type="warning" :closable="false" show-icon />
+    <el-alert title="尚未接入会话消息链路。演示扫描仅生成样本；手工任务提供真实对话后可调用模型，结果来源会在列表显示。" type="warning" :closable="false" show-icon />
 
     <div class="metrics">
       <el-card><strong>{{ overview?.total ?? 0 }}</strong><span>任务总数</span></el-card>
@@ -29,7 +29,7 @@
           <el-button @click="loadTasks">查询</el-button>
           <span class="toolbar-spacer" />
           <el-button @click="openManual">新增单个质检</el-button>
-          <el-button :disabled="!selected.length" :loading="busy" @click="batchAi">模拟批量初检</el-button>
+          <el-button :disabled="!selected.length" :loading="busy" @click="batchAi">{{ isMock ? '模拟批量初检' : '模型批量初检' }}</el-button>
           <el-button :disabled="!selected.length" :loading="busy" @click="batchReview">批量通过</el-button>
           <el-button type="primary" :loading="busy" @click="scan">生成演示任务</el-button>
         </div>
@@ -39,6 +39,9 @@
           <el-table-column prop="sessionName" label="会话" min-width="150" />
           <el-table-column prop="agentName" label="客服" min-width="110" />
           <el-table-column prop="aiScore" label="初检分" width="95" />
+          <el-table-column label="来源" width="125">
+            <template #default="{ row }">{{ sourceText(row.aiSource) }}</template>
+          </el-table-column>
           <el-table-column prop="riskText" label="风险" width="100" />
           <el-table-column prop="statusText" label="状态" width="100" />
           <el-table-column prop="createTime" label="创建时间" min-width="170" />
@@ -84,6 +87,7 @@
           <el-select v-model="manual.riskLevel"><el-option label="低风险" :value="1" /><el-option label="中风险" :value="2" /><el-option label="高风险" :value="3" /></el-select>
         </el-form-item>
         <el-form-item label="备注"><el-input v-model="manual.comment" type="textarea" :rows="3" maxlength="500" /></el-form-item>
+        <el-form-item label="对话文本"><el-input v-model="manual.transcript" type="textarea" :rows="5" maxlength="20000" placeholder="填写真实对话后会调用模型；留空则使用手工评分" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="manualVisible = false">取消</el-button><el-button type="primary" :loading="busy" @click="saveManual">创建</el-button></template>
     </el-dialog>
@@ -97,6 +101,7 @@
           <el-descriptions-item label="客服">{{ detail.agentName }}</el-descriptions-item>
           <el-descriptions-item label="初检分">{{ detail.aiScore ?? '—' }}</el-descriptions-item>
           <el-descriptions-item label="复核分">{{ detail.reviewScore ?? '—' }}</el-descriptions-item>
+          <el-descriptions-item label="初检来源">{{ sourceText(detail.aiSource) }}</el-descriptions-item>
         </el-descriptions>
         <p class="detail-comment">{{ detail.aiComment }}</p>
         <el-table :data="detail.ruleResults">
@@ -141,6 +146,7 @@ import {
 } from '../../api/customer/qa'
 
 const tab = ref('tasks')
+const isMock = import.meta.env.VITE_USE_MOCK === 'true'
 const overview = ref<QaOverview>()
 const tasks = ref<QaTaskItem[]>([])
 const rules = ref<QaRuleItem[]>([])
@@ -156,7 +162,7 @@ const detailVisible = ref(false)
 const reviewVisible = ref(false)
 const ruleVisible = ref(false)
 const reviewTaskNo = ref('')
-const manual = reactive({ sessionName: '', agentName: '', aiScore: 80, riskLevel: 1, comment: '' })
+const manual = reactive({ sessionName: '', agentName: '', aiScore: 80, riskLevel: 1, comment: '', transcript: '' })
 const review = reactive({ action: 1, score: 80, comment: '' })
 const rule = reactive({ id: '', ruleName: '', ruleType: 1, ruleContent: '', weight: 25, enabled: true })
 
@@ -182,7 +188,16 @@ async function loadRules() {
 }
 
 function onSelection(rows: QaTaskItem[]) { selected.value = rows }
-function openManual() { Object.assign(manual, { sessionName: '', agentName: '', aiScore: 80, riskLevel: 1, comment: '' }); manualVisible.value = true }
+function openManual() { Object.assign(manual, { sessionName: '', agentName: '', aiScore: 80, riskLevel: 1, comment: '', transcript: '' }); manualVisible.value = true }
+
+function sourceText(source?: string): string {
+  if (source === 'llm-qwen') return '千问模型'
+  if (source === 'llm-deepseek') return 'DeepSeek 模型'
+  if (source === 'fallback-rule') return '规则兜底'
+  if (source === 'manual') return '手工评分'
+  if (source === 'demo') return '演示数据'
+  return '未标记'
+}
 
 async function saveManual() {
   if (!manual.sessionName.trim() || !manual.agentName.trim()) return ElMessage.warning('请填写会话名称和接待客服')
@@ -230,7 +245,7 @@ async function batchAi() {
   busy.value = true
   try {
     await batchAiQaTasks(selected.value.map((item) => item.taskNo))
-    ElMessage.success('模拟初检完成')
+    ElMessage.success(isMock ? '模拟初检完成' : '模型初检完成')
     await Promise.all([loadTasks(), loadOverview()])
   } finally { busy.value = false }
 }

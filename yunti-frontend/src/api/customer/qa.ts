@@ -32,6 +32,7 @@ export interface QaTaskItem {
   reviewTime?: string
   aiComment?: string
   ruleNames: string[]
+  aiSource?: string
 }
 
 export interface RuleResult {
@@ -115,6 +116,7 @@ export function createManualQaTask(data: {
   riskLevel?: number
   comment?: string
   ruleNames?: string[]
+  transcript?: string
 }): Promise<QaTaskItem> {
   if (USE_MOCK) {
     const task = makeMockTask(data.sessionName, data.agentName, data.aiScore ?? 80, data.riskLevel ?? 1, data.comment)
@@ -164,6 +166,7 @@ export function batchAiQaTasks(taskNos: string[]): Promise<BatchReviewResult> {
       task.status = 1
       task.statusText = '待复核'
       task.reviewScore = undefined
+      task.aiSource = 'demo'
     }
     saveTasks(tasks)
     return Promise.resolve({ processed: taskNos.length, taskNos })
@@ -233,5 +236,6 @@ function makeMockTask(sessionName: string, agentName: string, score: number, ris
     riskLevel, riskText: ['低风险', '中风险', '高风险'][riskLevel - 1],
     status: 1, statusText: '待复核', createTime: new Date().toISOString(),
     aiComment: comment, ruleNames: [], ruleResults: [],
+    aiSource: 'demo',
   }
 }

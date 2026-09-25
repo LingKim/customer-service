@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS "qa_task" (
   "agent_id" BIGINT DEFAULT NULL,
   "ai_score" NUMERIC(5,2) DEFAULT NULL,
   "ai_result" TEXT DEFAULT NULL,
+  "transcript" TEXT DEFAULT NULL,
+  "ai_source" VARCHAR(32) DEFAULT NULL,
   "risk_level" SMALLINT DEFAULT 1,
   "status" SMALLINT NOT NULL DEFAULT 1,
   "reviewer_id" BIGINT DEFAULT NULL,

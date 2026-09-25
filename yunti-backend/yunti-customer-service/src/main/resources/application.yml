@@ -21,6 +21,8 @@ yunti:
     jwt-secret: ${YUNTI_JWT_SECRET:yunti-customer-service-jwt-secret-please-change-in-prod-0123456789}
   user:
     internal-base-url: ${YUNTI_USER_INTERNAL_URL:http://127.0.0.1:9091}
+  ai:
+    qa-base-url: ${YUNTI_AI_SERVICE_URL:http://127.0.0.1:9100}
   file:
     storage:
       type: ${YUNTI_FILE_STORAGE_TYPE:local}

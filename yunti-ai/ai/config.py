@@ -17,7 +17,15 @@ class Settings(BaseSettings):
 
     # LLM 网关（默认 mock，装好 AI 依赖后可切 qwen/deepseek）
     llm_default_provider: str = "mock"
-    llm_default_model: str = "mock-model"
+    llm_default_model: str = ""
+    llm_timeout: int = 30
+    llm_log_payload: bool = False
+    qwen_api_key: str = ""
+    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_model: str = "qwen-plus"
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com/v1"
+    deepseek_model: str = "deepseek-chat"
 
     redis_url: str = "redis://localhost:6379/0"
     kafka_bootstrap: str = "localhost:9092"

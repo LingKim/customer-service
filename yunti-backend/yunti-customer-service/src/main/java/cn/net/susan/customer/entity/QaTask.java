@@ -39,6 +39,12 @@ public class QaTask {
     /** AI 初检 JSON：会话名/坐席名/命中规则/评语 */
     private String aiResult;
 
+    /** 送检对话文本；仅从当前租户明确提供的会话取得。 */
+    private String transcript;
+
+    /** llm-qwen、llm-deepseek、fallback-rule 或 demo。 */
+    private String aiSource;
+
     /** 风险码：1-低、2-中、3-高 */
     private Integer riskLevel;
 

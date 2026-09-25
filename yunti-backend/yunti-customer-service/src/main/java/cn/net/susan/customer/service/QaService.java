@@ -6,6 +6,7 @@ import cn.net.susan.common.id.SnowflakeIdGenerator;
 import cn.net.susan.customer.entity.QaReview;
 import cn.net.susan.customer.entity.QaRule;
 import cn.net.susan.customer.entity.QaTask;
+import cn.net.susan.customer.internal.QaAiClient;
 import cn.net.susan.customer.mapper.QaReviewMapper;
 import cn.net.susan.customer.mapper.QaRuleMapper;
 import cn.net.susan.customer.mapper.QaTaskMapper;
@@ -53,17 +54,20 @@ public class QaService {
     private final QaTaskMapper qaTaskMapper;
     private final QaReviewMapper qaReviewMapper;
     private final SnowflakeIdGenerator idGenerator;
+    private final QaAiClient qaAiClient;
 
     public QaService(
             QaRuleMapper qaRuleMapper,
             QaTaskMapper qaTaskMapper,
             QaReviewMapper qaReviewMapper,
-            SnowflakeIdGenerator idGenerator
+            SnowflakeIdGenerator idGenerator,
+            QaAiClient qaAiClient
     ) {
         this.qaRuleMapper = qaRuleMapper;
         this.qaTaskMapper = qaTaskMapper;
         this.qaReviewMapper = qaReviewMapper;
         this.idGenerator = idGenerator;
+        this.qaAiClient = qaAiClient;
     }
 
     /**
@@ -143,7 +147,8 @@ public class QaService {
                 ai.comment(),
                 ai.rules(),
                 results,
-                task.getReviewerId() == null ? null : String.valueOf(task.getReviewerId())
+                task.getReviewerId() == null ? null : String.valueOf(task.getReviewerId()),
+                task.getAiSource()
         );
     }
 
@@ -169,7 +174,6 @@ public class QaService {
     /**
      * 新增单个质检：针对某个会话手动创建一条待复核任务。
      */
-    @Transactional
     public TaskVO createManual(
             LoginUser user,
             String sessionName,
@@ -177,7 +181,9 @@ public class QaService {
             Double aiScore,
             Integer riskLevel,
             String comment,
-            List<String> ruleNames
+            List<String> ruleNames,
+            String transcript,
+            String authorization
     ) {
         String tenant = tenantOf(user);
         ensureRules(tenant, user.userId());
@@ -203,6 +209,20 @@ public class QaService {
         ai.put("agentName", agentName.trim());
         ai.put("comment", comment == null || comment.isBlank() ? "人工发起单个质检，请复核人结合会话内容给出结论。" : comment.trim());
         ai.put("rules", validRules);
+        String source = "manual";
+        if (transcript != null && !transcript.isBlank()) {
+            List<QaAiClient.Rule> specs = enabledRules(tenant).stream()
+                    .filter(rule -> validRules.isEmpty() || validRules.contains(rule.getRuleName()))
+                    .map(rule -> new QaAiClient.Rule(rule.getRuleName(), rule.getRuleContent()))
+                    .toList();
+            QaAiClient.Evaluation evaluated = qaAiClient.evaluate(new QaAiClient.Request(
+                    tenant, sessionName.trim(), agentName.trim(), transcript.trim(), specs), authorization);
+            score = evaluated.aiScore();
+            risk = evaluated.riskLevel();
+            ai.put("comment", evaluated.comment());
+            ai.put("rules", evaluated.rules());
+            source = evaluated.source();
+        }
 
         QaTask task = QaTask.builder()
                 .id(idGenerator.nextId())
@@ -212,6 +232,8 @@ public class QaService {
                 .agentId(null)
                 .aiScore(BigDecimal.valueOf(score).setScale(2, RoundingMode.HALF_UP))
                 .aiResult(writeJson(ai))
+                .transcript(transcript == null || transcript.isBlank() ? null : transcript.trim())
+                .aiSource(source)
                 .riskLevel(risk)
                 .status(1)
                 .creator(String.valueOf(user.userId()))
@@ -291,10 +313,9 @@ public class QaService {
     }
 
     /**
-     * 演示批量初检：使用确定性模拟评分，真实模型接入后再替换。
+     * 对有对话文本的任务执行模型初检；无文本任务不得伪造模型评分。
      */
-    @Transactional
-    public BatchAiResult batchAiCheck(LoginUser user, List<String> taskNos) {
+    public BatchAiResult batchAiCheck(LoginUser user, List<String> taskNos, String authorization) {
         String tenant = tenantOf(user);
         if (taskNos == null || taskNos.isEmpty()) {
             throw new BizException(40001, "请选择至少一条质检任务");
@@ -302,37 +323,32 @@ public class QaService {
         if (taskNos.size() > 200) {
             throw new BizException(40001, "单次批量 AI 质检最多选择 200 条任务");
         }
-        List<QaRule> enabled = enabledRules(tenant);
-        LocalDateTime now = LocalDateTime.now();
-        for (String taskNo : taskNos) {
-            QaTask task = requireTask(tenant, taskNo);
+        List<QaTask> selected = taskNos.stream().map(taskNo -> requireTask(tenant, taskNo)).toList();
+        if (selected.stream().anyMatch(task -> task.getTranscript() == null || task.getTranscript().isBlank())) {
+            throw new BizException(40001, "所选任务含无对话文本的演示任务，无法执行真实模型初检");
+        }
+        List<QaAiClient.Rule> specs = enabledRules(tenant).stream()
+                .map(rule -> new QaAiClient.Rule(rule.getRuleName(), rule.getRuleContent()))
+                .toList();
+        for (QaTask task : selected) {
             AiResult old = parseAi(task);
-            int seed = Math.floorMod(task.getTaskNo().hashCode(), 997);
-            double score = 72 + seed % 26;
-            int risk = score >= 88 ? 1 : score >= 78 ? 2 : 3;
-            List<String> hitRules = new ArrayList<>();
-            if (seed % 3 == 0 && !enabled.isEmpty()) {
-                hitRules.add(enabled.get(0).getRuleName());
-            }
-            if (seed % 5 == 0 && enabled.size() > 1) {
-                hitRules.add(enabled.get(1).getRuleName());
-            }
+            QaAiClient.Evaluation evaluated = qaAiClient.evaluate(new QaAiClient.Request(
+                    tenant, old.sessionName(), old.agentName(), task.getTranscript(), specs), authorization);
             Map<String, Object> ai = new LinkedHashMap<>();
             ai.put("sessionName", old.sessionName());
             ai.put("agentName", old.agentName());
-            ai.put("comment", seed % 3 == 0
-                    ? "演示初检：模拟命中部分规则，请结合会话复核。"
-                    : "演示初检：模拟服务评分，请人工复核确认。");
-            ai.put("rules", hitRules);
-            task.setAiScore(BigDecimal.valueOf(score).setScale(2, RoundingMode.HALF_UP));
+            ai.put("comment", evaluated.comment());
+            ai.put("rules", evaluated.rules());
+            task.setAiScore(BigDecimal.valueOf(evaluated.aiScore()).setScale(2, RoundingMode.HALF_UP));
             task.setAiResult(writeJson(ai));
-            task.setRiskLevel(risk);
+            task.setAiSource(evaluated.source());
+            task.setRiskLevel(evaluated.riskLevel());
             task.setStatus(1);
             task.setReviewScore(null);
             task.setReviewerId(null);
             task.setReviewTime(null);
             task.setEditor(String.valueOf(user.userId()));
-            task.setUpdateTime(now);
+            task.setUpdateTime(LocalDateTime.now());
             qaTaskMapper.updateById(task);
         }
         return new BatchAiResult(taskNos.size(), List.copyOf(taskNos));
@@ -465,6 +481,7 @@ public class QaService {
                 .agentId(null)
                 .aiScore(BigDecimal.valueOf(spec.aiScore()).setScale(2, RoundingMode.HALF_UP))
                 .aiResult(writeJson(ai))
+                .aiSource("demo")
                 .riskLevel(spec.riskLevel())
                 .status(1)
                 .creator("AI_QA")
@@ -517,7 +534,8 @@ public class QaService {
                 task.getCreateTime() == null ? null : task.getCreateTime().toString().replace('T', ' '),
                 task.getReviewTime() == null ? null : task.getReviewTime().toString().replace('T', ' '),
                 ai.comment(),
-                ai.rules()
+                ai.rules(),
+                task.getAiSource()
         );
     }
 
@@ -745,7 +763,8 @@ public class QaService {
             String createTime,
             String reviewTime,
             String aiComment,
-            List<String> ruleNames
+            List<String> ruleNames,
+            String aiSource
     ) {
     }
 
@@ -768,7 +787,8 @@ public class QaService {
             String aiComment,
             List<String> ruleNames,
             List<RuleResultVO> ruleResults,
-            String reviewerId
+            String reviewerId,
+            String aiSource
     ) {
     }
 
