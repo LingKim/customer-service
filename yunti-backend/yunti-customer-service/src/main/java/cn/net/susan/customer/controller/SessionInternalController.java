@@ -66,10 +66,14 @@ public class SessionInternalController {
             @PathVariable String sessionNo,
             @RequestParam String tenantCode,
             @RequestParam(required = false) Long beforeId,
+            @RequestParam(required = false) Long afterSeq,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false, defaultValue = "true") boolean agentView
     ) {
         requireInternalSecret(internalSecret);
+        if (afterSeq != null) {
+            return ApiResponse.ok(sessionService.messagesAfter(tenantCode, sessionNo, afterSeq, limit, agentView));
+        }
         return ApiResponse.ok(sessionService.historyByTenant(tenantCode, sessionNo, beforeId, limit, agentView));
     }
 
@@ -90,7 +94,8 @@ public class SessionInternalController {
                 body.senderId(),
                 body.msgType() == null ? 1 : body.msgType(),
                 body.content(),
-                body.visibleTo() == null ? SessionService.VISIBLE_ALL : body.visibleTo()
+                body.visibleTo() == null ? SessionService.VISIBLE_ALL : body.visibleTo(),
+                body.clientMsgNo()
         ));
     }
 
@@ -168,7 +173,8 @@ public class SessionInternalController {
                 session.getAgentId(),
                 session.getCustomerId(),
                 session.getStartTime(),
-                session.getEndTime()
+                session.getEndTime(),
+                session.getLastMsgSeq()
         );
     }
 
@@ -181,7 +187,9 @@ public class SessionInternalController {
             Long agentId,
             Long customerId,
             LocalDateTime startTime,
-            LocalDateTime endTime
+            LocalDateTime endTime,
+            /** 会话当前最大消息序号：客户端据此判断要不要补拉 */
+            Long lastSeq
     ) {
     }
 
@@ -199,7 +207,11 @@ public class SessionInternalController {
             String content,
 
             /** 可见范围：1-客户与坐席都可见、2-仅坐席可见（内部备注） */
-            Integer visibleTo
+            Integer visibleTo,
+
+            /** 客户端消息号（幂等键）：同一条消息重发多少次都只落一条 */
+            @Size(max = 64)
+            String clientMsgNo
     ) {
     }
 

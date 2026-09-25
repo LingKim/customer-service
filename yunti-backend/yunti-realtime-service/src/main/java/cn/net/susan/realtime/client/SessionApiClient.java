@@ -45,7 +45,9 @@ public class SessionApiClient {
             Long agentId,
             Long customerId,
             String startTime,
-            String endTime
+            String endTime,
+            /** 会话当前最大消息序号：用来告诉客户端要不要补拉 */
+            Long lastSeq
     ) {
         public boolean closed() {
             return status != null && status == 4;
@@ -56,6 +58,10 @@ public class SessionApiClient {
     public record MessageView(
             String msgId,
             String msgNo,
+            /** 客户端消息号：回 ACK 时带上，客户端据此把"发送中"改成"已发送" */
+            String clientMsgNo,
+            /** 会话内序号：双方按它排序，也是增量补拉的游标 */
+            Long seq,
             Long sessionId,
             Integer senderType,
             Long senderId,
@@ -106,19 +112,23 @@ public class SessionApiClient {
             Long senderId,
             int msgType,
             String content,
-            int visibleTo
+            int visibleTo,
+            String clientMsgNo
     ) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("tenantCode", tenantCode);
+        body.put("senderType", senderType);
+        body.put("senderId", senderId == null ? 0L : senderId);
+        body.put("msgType", msgType);
+        body.put("content", content);
+        body.put("visibleTo", visibleTo);
+        if (clientMsgNo != null && !clientMsgNo.isBlank()) {
+            body.put("clientMsgNo", clientMsgNo);
+        }
         ApiResponse<MessageView> response = restClient.post()
                 .uri("/api/customer/internal/sessions/{sessionNo}/messages", sessionNo)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of(
-                        "tenantCode", tenantCode,
-                        "senderType", senderType,
-                        "senderId", senderId == null ? 0L : senderId,
-                        "msgType", msgType,
-                        "content", content,
-                        "visibleTo", visibleTo
-                ))
+                .body(body)
                 .retrieve()
                 .body(new ParameterizedTypeReference<ApiResponse<MessageView>>() {
                 });

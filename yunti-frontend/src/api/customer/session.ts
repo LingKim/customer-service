@@ -24,6 +24,10 @@ export interface SessionItem {
 export interface SessionMessageItem {
   msgId: string
   msgNo: string
+  /** 客户端消息号：本地"发送中"的气泡靠它和 ACK 对上 */
+  clientMsgNo?: string | null
+  /** 会话内序号：排序与增量补拉的游标 */
+  seq?: number | null
   sessionId?: number
   senderType: number
   senderId?: number | null
@@ -32,6 +36,9 @@ export interface SessionMessageItem {
   /** 可见范围：1-客户与坐席都可见、2-仅坐席可见（内部备注） */
   visibleTo?: number
   sendTime: string
+  /** 仅前端使用：本地乐观气泡的状态 */
+  pending?: boolean
+  failed?: boolean
 }
 
 /** 访客开会话结果 */
@@ -88,7 +95,7 @@ export function getSessionDetail(sessionNo: string): Promise<SessionItem> {
 /** 聊天记录（beforeId 用于向上翻页） */
 export function listSessionMessages(
   sessionNo: string,
-  params: { beforeId?: string; limit?: number } = {},
+  params: { beforeId?: string; afterSeq?: number; limit?: number } = {},
 ): Promise<SessionMessageItem[]> {
   return request<SessionMessageItem[]>({
     url: `/customer/sessions/${sessionNo}/messages`,

@@ -316,6 +316,8 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
         payload.put("agents", registry.agentIdsInSession(sessionNo));
         // 告诉前端"还有没有更早的消息"，工作台的「更早消息」按钮据此置灰
         payload.put("hasMore", messages.size() >= JOIN_HISTORY_LIMIT);
+        // 会话当前最大序号：客户端拿本地最大序号一比，就知道断线期间有没有漏消息
+        payload.put("lastSeq", session.lastSeq() == null ? 0L : session.lastSeq());
         send(socket, RealtimeMessage.withData("JOINED", sessionNo, payload));
     }
 
@@ -355,7 +357,8 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
                 principal.id(),
                 inbound.msgType() == null ? 1 : inbound.msgType(),
                 content,
-                visibleTo
+                visibleTo,
+                inbound.clientMsgNo()
         );
 
         send(client.socket(), new RealtimeMessage("ACK", sessionNo, inbound.clientMsgNo(), null, null, null,

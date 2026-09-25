@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 会话与消息：实时通信底座的业务落库方。
@@ -77,6 +78,9 @@ public class SessionService {
 
     private static final int DEFAULT_HISTORY_LIMIT = 30;
     private static final int MAX_HISTORY_LIMIT = 100;
+    /** 增量补拉的默认/最大条数：断线补偿一次最多拉这么多，剩下靠下一次轮询继续追 */
+    private static final int DEFAULT_SYNC_LIMIT = 100;
+    private static final int MAX_SYNC_LIMIT = 500;
     private static final int SESSION_LIST_LIMIT = 100;
     private static final int EVENT_LIST_LIMIT = 20;
 
@@ -286,21 +290,101 @@ public class SessionService {
             String content,
             int visibleTo
     ) {
+        return appendMessage(tenantCode, sessionNo, senderType, senderId, msgType, content, visibleTo, null);
+    }
+
+    /**
+     * 内部接口：落一条消息（消息必达版）。
+     *
+     * <p>两条保证：</p>
+     * <ol>
+     *   <li><b>幂等</b>：带 {@code clientMsgNo} 时先按 (租户, 会话, clientMsgNo) 查一次，
+     *       已经落过就直接把原消息返回——客户端断线重发、连发两次都只会有一条；</li>
+     *   <li><b>时序</b>：序号由数据库 {@code UPDATE ... RETURNING} 自增分配，
+     *       同一会话内严格递增，双方按序号排序就不会出现顺序不一致。</li>
+     * </ol>
+     */
+    @Transactional
+    public MessageVO appendMessage(
+            String tenantCode,
+            String sessionNo,
+            int senderType,
+            Long senderId,
+            int msgType,
+            String content,
+            int visibleTo,
+            String clientMsgNo
+    ) {
         Session session = requireSession(tenantCode, sessionNo);
+        if (sessionMapper.lockSessionForMessage(tenantCode, session.getId()) == null) {
+            throw new BizException(40401, "会话不存在");
+        }
+        session = requireSession(tenantCode, sessionNo);
+        String normalizedClientMsgNo = clientMsgNo == null || clientMsgNo.isBlank() ? null : clientMsgNo.trim();
+        if (normalizedClientMsgNo != null && normalizedClientMsgNo.length() > 64) {
+            throw new BizException(40001, "客户端消息号最长 64 字符");
+        }
+        if (normalizedClientMsgNo != null) {
+            SessionMessage existing = sessionMessageMapper.selectByClientMsgNo(
+                    tenantCode, session.getId(), normalizedClientMsgNo);
+            if (existing != null) {
+                if (!Objects.equals(existing.getSenderType(), senderType)
+                        || !Objects.equals(existing.getSenderId(), senderId)
+                        || !Objects.equals(existing.getMsgType(), msgType)
+                        || !Objects.equals(existing.getVisibleTo(), visibleTo)
+                        || !Objects.equals(existing.getContent(), content)) {
+                    throw new BizException(40002, "客户端消息号已用于另一条消息");
+                }
+                log.info("消息重复投递，直接复用已落库的消息 tenant={} sessionNo={} clientMsgNo={} msgNo={}",
+                        tenantCode, sessionNo, normalizedClientMsgNo, existing.getMsgNo());
+                return toMessageVO(existing);
+            }
+        }
         if (Integer.valueOf(STATUS_CLOSED).equals(session.getStatus())) {
             throw new BizException(40301, "会话已结束，无法继续发送消息");
         }
         SessionMessage message = buildMessage(
                 tenantCode, session.getId(), senderType, senderId, msgType, content, visibleTo);
+        message.setClientMsgNo(normalizedClientMsgNo);
+        message.setSeq(nextSeq(tenantCode, session.getId()));
         sessionMessageMapper.insert(message);
 
         LocalDateTime now = LocalDateTime.now();
-        Session update = new Session();
-        update.setId(session.getId());
-        update.setUpdateTime(now);
-        sessionMapper.updateById(update);
         touchCustomer(tenantCode, session.getCustomerId(), now);
         return toMessageVO(message);
+    }
+
+    /** 分配会话内的下一个消息序号（数据库自增，并发安全） */
+    private long nextSeq(String tenantCode, Long sessionId) {
+        Long seq = sessionMapper.nextMessageSeq(tenantCode, sessionId);
+        if (seq == null) {
+            throw new BizException(40401, "会话不存在");
+        }
+        return seq;
+    }
+
+    /**
+     * 内部接口：增量补拉——取序号大于 afterSeq 的消息（客户端重连后补齐断线期间漏掉的消息）。
+     */
+    public List<MessageVO> messagesAfter(
+            String tenantCode,
+            String sessionNo,
+            long afterSeq,
+            Integer limit,
+            boolean agentView
+    ) {
+        Session session = requireSession(tenantCode, sessionNo);
+        int size = limit == null || limit <= 0 ? DEFAULT_SYNC_LIMIT : Math.min(limit, MAX_SYNC_LIMIT);
+        List<SessionMessage> rows = sessionMessageMapper.selectAfterSeq(
+                tenantCode, session.getId(), afterSeq, agentView ? null : VISIBLE_ALL, size);
+        return rows.stream().map(this::toMessageVO).toList();
+    }
+
+    /**
+     * 对外接口：工作台按序号补拉（断线重连后补齐当前会话漏掉的消息）。
+     */
+    public List<MessageVO> messagesAfter(LoginUser user, String sessionNo, long afterSeq, Integer limit) {
+        return messagesAfter(tenantOf(user), sessionNo, afterSeq, limit, true);
     }
 
     /**
@@ -481,7 +565,11 @@ public class SessionService {
     }
 
     private void appendSystemMessage(String tenant, Session session, String content) {
-        sessionMessageMapper.insert(buildMessage(tenant, session.getId(), SENDER_SYSTEM, null, 5, content, VISIBLE_ALL));
+        SessionMessage message = buildMessage(
+                tenant, session.getId(), SENDER_SYSTEM, null, 5, content, VISIBLE_ALL);
+        // 系统提示同样要占一个序号，否则客户端按序号排序/补拉时会出现空洞
+        message.setSeq(nextSeq(tenant, session.getId()));
+        sessionMessageMapper.insert(message);
     }
 
     private SessionMessage buildMessage(
@@ -737,6 +825,8 @@ public class SessionService {
         return new MessageVO(
                 String.valueOf(message.getId()),
                 message.getMsgNo(),
+                message.getClientMsgNo(),
+                message.getSeq(),
                 message.getSessionId(),
                 message.getSenderType(),
                 message.getSenderId(),
@@ -827,6 +917,10 @@ public class SessionService {
     public record MessageVO(
             String msgId,
             String msgNo,
+            /** 客户端消息号：前端据此把"发送中"的气泡换成"已发送" */
+            String clientMsgNo,
+            /** 会话内序号：双方按它排序，也是增量补拉的游标 */
+            Long seq,
             Long sessionId,
             Integer senderType,
             Long senderId,

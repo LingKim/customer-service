@@ -65,7 +65,7 @@
     <!-- 同一渠道、同一客户未结束的会话，访客刷新页面时复用，不重复开会话 -->
     <select id="selectOpenSession" resultType="cn.net.susan.customer.entity.Session">
         SELECT id, tenant_code, session_no, channel_id, customer_id, status, skill_group_id,
-               agent_id, intent, emotion, source, start_time, end_time, csat_score,
+               agent_id, intent, emotion, source, start_time, end_time, csat_score, last_msg_seq,
                create_time, update_time, creator, editor, is_deleted
           FROM session
          WHERE tenant_code = #{tenantCode}
@@ -94,4 +94,21 @@
            AND status = 3
            AND is_deleted = FALSE
     </update>
+    <select id="nextMessageSeq" resultType="java.lang.Long">
+        UPDATE session
+           SET last_msg_seq = last_msg_seq + 1,
+               update_time = CURRENT_TIMESTAMP
+         WHERE tenant_code = #{tenantCode}
+           AND id = #{sessionId}
+           AND is_deleted = FALSE
+        RETURNING last_msg_seq
+    </select>
+    <select id="lockSessionForMessage" resultType="java.lang.Long">
+        SELECT id
+          FROM session
+         WHERE tenant_code = #{tenantCode}
+           AND id = #{sessionId}
+           AND is_deleted = FALSE
+         FOR UPDATE
+    </select>
 </mapper>

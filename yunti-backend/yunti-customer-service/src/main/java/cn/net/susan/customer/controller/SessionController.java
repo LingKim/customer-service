@@ -114,9 +114,14 @@ public class SessionController {
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @PathVariable String sessionNo,
             @RequestParam(required = false) Long beforeId,
+            @RequestParam(required = false) Long afterSeq,
             @RequestParam(required = false) Integer limit
     ) {
         LoginUser user = jwtTokenParser.requireLoginUser(authorization);
+        if (afterSeq != null) {
+            // 断线重连补偿：只要序号大于 afterSeq 的那几条
+            return ApiResponse.ok(sessionService.messagesAfter(user, sessionNo, afterSeq, limit));
+        }
         return ApiResponse.ok(sessionService.history(user, sessionNo, beforeId, limit));
     }
 

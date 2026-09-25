@@ -32,4 +32,24 @@ public interface SessionMessageMapper extends BaseMapper<SessionMessage> {
             @Param("visibleTo") Integer visibleTo,
             @Param("limit") int limit
     );
+
+    /**
+     * 按客户端消息号取一条（幂等判重）。
+     */
+    SessionMessage selectByClientMsgNo(
+            @Param("tenantCode") String tenantCode,
+            @Param("sessionId") Long sessionId,
+            @Param("clientMsgNo") String clientMsgNo
+    );
+
+    /**
+     * 增量补拉：取序号大于 afterSeq 的消息（重连后补齐断线期间漏掉的消息）。
+     */
+    List<SessionMessage> selectAfterSeq(
+            @Param("tenantCode") String tenantCode,
+            @Param("sessionId") Long sessionId,
+            @Param("afterSeq") long afterSeq,
+            @Param("visibleTo") Integer visibleTo,
+            @Param("limit") int limit
+    );
 }

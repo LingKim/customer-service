@@ -29,6 +29,15 @@ export interface RealtimeMessage {
   message?: string
 }
 
+/** 待确认的消息（发件箱条目）：断线、刷新后都要能重发 */
+export interface OutboxItem {
+  clientMsgNo: string
+  sessionNo?: string
+  content?: string
+  attempts: number
+  createdAt: number
+}
+
 export interface RealtimeClientOptions {
   /** 访问令牌：坐席用登录令牌，访客用访客令牌 */
   token: string
@@ -40,6 +49,8 @@ export interface RealtimeClientOptions {
   heartbeatMs?: number
   /** 单条消息等待 ACK 的超时（毫秒），默认 8 秒 */
   ackTimeoutMs?: number
+  /** 发件箱变化（可用于展示"发送中/待重发"） */
+  onOutboxChange?: (items: OutboxItem[]) => void
 }
 
 interface PendingMessage {
@@ -49,10 +60,18 @@ interface PendingMessage {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   reject: (reason?: any) => void
   timer: number
+  attempts: number
 }
 
 const MAX_RECONNECT_DELAY = 15000
 const BASE_RECONNECT_DELAY = 1000
+/** 单条消息最多自动重发几次；之后交给页面提示用户手动重发（重发沿用同一个 clientMsgNo，不会重复） */
+const MAX_SEND_ATTEMPTS = 6
+/** 自动重发间隔 */
+const RETRY_INTERVAL = 4000
+/** 发件箱持久化 key：刷新页面也能把没确认的消息补发出去 */
+const OUTBOX_KEY = 'yunti_realtime_outbox'
+const OUTBOX_LIMIT = 50
 
 export class RealtimeClient {
   private readonly options: Required<Pick<RealtimeClientOptions, 'heartbeatMs' | 'ackTimeoutMs'>> &
@@ -65,6 +84,7 @@ export class RealtimeClient {
   private reconnectAttempt = 0
   private manualClosed = false
   private seq = 0
+  private retryTimer: number | undefined
   private readonly pending = new Map<string, PendingMessage>()
 
   constructor(options: RealtimeClientOptions) {
@@ -81,6 +101,7 @@ export class RealtimeClient {
 
   connect(): void {
     this.manualClosed = false
+    this.restoreOutbox()
     this.open()
   }
 
@@ -91,27 +112,54 @@ export class RealtimeClient {
     this.socket?.close(1000, 'client close')
     this.socket = null
     this.pending.forEach((item) => {
-      window.clearTimeout(item.timer)
       item.reject(new Error('连接已关闭'))
     })
     this.pending.clear()
+    this.persistOutbox()
+    this.notifyOutbox()
     this.setState('closed')
   }
 
   /**
    * 发送消息并等待服务端 ACK。
+   *
+   * <p>必达约定：消息先进入发件箱（localStorage 持久化），拿到 ACK 才出箱。
+   * 期间断线、刷新、超时都不会把消息丢掉——重连后会用同一个 clientMsgNo 重发，
+   * 服务端按幂等键去重，所以既能补发又不会重复。</p>
    */
   send(payload: Omit<RealtimeMessage, 'clientMsgNo'>): Promise<RealtimeMessage> {
     const clientMsgNo = this.nextClientMsgNo()
     const message: RealtimeMessage = { ...payload, clientMsgNo }
     return new Promise<RealtimeMessage>((resolve, reject) => {
-      const timer = window.setTimeout(() => {
-        this.pending.delete(clientMsgNo)
-        reject(new Error('发送超时，请检查网络后重试'))
-      }, this.options.ackTimeoutMs)
-      this.pending.set(clientMsgNo, { payload: message, resolve, reject, timer })
+      this.pending.set(clientMsgNo, { payload: message, resolve, reject, timer: 0, attempts: 0 })
+      this.persistOutbox()
+      this.notifyOutbox()
       this.flush(clientMsgNo)
+      this.scheduleRetry()
     })
+  }
+
+  /** 手动重发（页面上点"重发"时调用）：沿用原 clientMsgNo，服务端幂等去重 */
+  retry(clientMsgNo: string): void {
+    const item = this.pending.get(clientMsgNo)
+    if (!item) {
+      return
+    }
+    item.attempts = 0
+    this.flush(clientMsgNo, item)
+    this.scheduleRetry()
+    this.notifyOutbox()
+  }
+
+  /** 当前发件箱（还没等到 ACK 的消息） */
+  outbox(): OutboxItem[] {
+    return [...this.pending.values()].map((item) => ({
+      clientMsgNo: item.payload.clientMsgNo as string,
+      sessionNo: item.payload.sessionNo,
+      content: item.payload.content,
+      attempts: item.attempts,
+      createdAt: 0,
+    }))
   }
 
   /** 不需要 ACK 的控制类消息（心跳、拉历史等） */
@@ -153,8 +201,9 @@ export class RealtimeClient {
       if (message.type === 'ACK' && message.clientMsgNo) {
         const item = this.pending.get(message.clientMsgNo)
         if (item) {
-          window.clearTimeout(item.timer)
           this.pending.delete(message.clientMsgNo)
+          this.persistOutbox()
+          this.notifyOutbox()
           item.resolve(message)
         }
       }
@@ -221,7 +270,93 @@ export class RealtimeClient {
     if (!target || this.socket?.readyState !== WebSocket.OPEN) {
       return
     }
+    target.attempts += 1
     this.rawSend(target.payload)
+  }
+
+  /**
+   * 自动重发：只要还有没确认的消息，就按固定节奏补发一次。
+   * 超过上限还没有 ACK 的，把 promise 置为失败，但**消息留在发件箱里**，
+   * 后续重连仍会补发（服务端幂等，不会产生重复）。
+   */
+  private scheduleRetry(): void {
+    if (this.retryTimer || this.manualClosed) {
+      return
+    }
+    this.retryTimer = window.setInterval(() => {
+      if (this.manualClosed) {
+        this.stopRetry()
+        return
+      }
+      if (!this.pending.size) {
+        this.stopRetry()
+        return
+      }
+      this.pending.forEach((item, clientMsgNo) => {
+        if (this.socket?.readyState === WebSocket.OPEN) {
+          this.flush(clientMsgNo, item)
+        }
+        if (item.attempts >= MAX_SEND_ATTEMPTS && item.timer === 0) {
+          // 只通知一次失败，消息继续留在发件箱等网络恢复
+          item.timer = 1
+          item.reject(new Error('网络不稳定，消息已保留，恢复后会自动补发'))
+          this.notifyOutbox()
+        }
+      })
+    }, RETRY_INTERVAL)
+  }
+
+  private stopRetry(): void {
+    if (this.retryTimer) {
+      window.clearInterval(this.retryTimer)
+      this.retryTimer = undefined
+    }
+  }
+
+  /** 发件箱落盘：刷新页面后 still 能把没确认的消息补发出去 */
+  private persistOutbox(): void {
+    try {
+      const items = this.outbox().slice(-OUTBOX_LIMIT)
+      window.localStorage.setItem(OUTBOX_KEY, JSON.stringify(items))
+    } catch {
+      // 存储不可用（隐私模式等）时忽略，内存发件箱仍然有效
+    }
+  }
+
+  /** 恢复发件箱：只恢复"还没确认"的消息，重新排队等待补发 */
+  private restoreOutbox(): void {
+    let items: OutboxItem[] = []
+    try {
+      items = JSON.parse(window.localStorage.getItem(OUTBOX_KEY) || '[]') as OutboxItem[]
+    } catch {
+      items = []
+    }
+    for (const item of items) {
+      if (!item?.clientMsgNo || this.pending.has(item.clientMsgNo)) {
+        continue
+      }
+      const payload: RealtimeMessage = {
+        type: 'SEND',
+        sessionNo: item.sessionNo,
+        content: item.content,
+        msgType: 1,
+        clientMsgNo: item.clientMsgNo,
+      }
+      this.pending.set(item.clientMsgNo, {
+        payload,
+        resolve: () => undefined,
+        reject: () => undefined,
+        timer: 0,
+        attempts: 0,
+      })
+    }
+    if (items.length) {
+      this.notifyOutbox()
+    }
+  }
+
+  private notifyOutbox(): void {
+    this.options.onOutboxChange?.(this.outbox())
   }
 
   private rawSend(payload: RealtimeMessage): void {
@@ -246,6 +381,7 @@ export class RealtimeClient {
 
   private clearTimers(): void {
     this.stopHeartbeat()
+    this.stopRetry()
     if (this.reconnectTimer) {
       window.clearTimeout(this.reconnectTimer)
       this.reconnectTimer = undefined

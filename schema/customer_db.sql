@@ -148,6 +148,7 @@ CREATE TABLE IF NOT EXISTS "session" (
   "id" BIGINT NOT NULL,
   "tenant_code" VARCHAR(16) NOT NULL,
   "session_no" VARCHAR(40) NOT NULL,
+  "last_msg_seq" BIGINT NOT NULL DEFAULT 0,
   "channel_id" BIGINT NOT NULL,
   "customer_id" BIGINT DEFAULT NULL,
   "status" SMALLINT NOT NULL DEFAULT 1,
@@ -171,6 +172,7 @@ CREATE TABLE IF NOT EXISTS "session" (
 COMMENT ON TABLE "session" IS '会话表';
 COMMENT ON COLUMN "session"."id" IS '主键ID（雪花算法生成）';
 COMMENT ON COLUMN "session"."session_no" IS '会话编号';
+COMMENT ON COLUMN "session"."last_msg_seq" IS '会话已分配的最大消息序号';
 COMMENT ON COLUMN "session"."channel_id" IS '来源渠道ID';
 COMMENT ON COLUMN "session"."customer_id" IS '客户ID';
 COMMENT ON COLUMN "session"."status" IS '状态码：1-排队中、2-机器人接待、3-人工接待、4-已结束';
@@ -190,6 +192,8 @@ CREATE TABLE IF NOT EXISTS "session_message" (
   "tenant_code" VARCHAR(16) NOT NULL,
   "session_id" BIGINT NOT NULL,
   "msg_no" VARCHAR(40) NOT NULL,
+  "client_msg_no" VARCHAR(64),
+  "seq" BIGINT NOT NULL DEFAULT 0,
   "msg_type" SMALLINT NOT NULL,
   "visible_to" SMALLINT NOT NULL DEFAULT 1,
   "sender_type" SMALLINT NOT NULL,
@@ -213,7 +217,9 @@ CREATE TABLE IF NOT EXISTS "session_message" (
 COMMENT ON TABLE "session_message" IS '会话消息表';
 COMMENT ON COLUMN "session_message"."id" IS '主键ID（雪花算法生成）';
 COMMENT ON COLUMN "session_message"."session_id" IS '会话ID';
-COMMENT ON COLUMN "session_message"."msg_no" IS '消息编号（客户端幂等键）';
+COMMENT ON COLUMN "session_message"."msg_no" IS '服务端消息编号';
+COMMENT ON COLUMN "session_message"."client_msg_no" IS '客户端消息号（同一会话内的幂等键）';
+COMMENT ON COLUMN "session_message"."seq" IS '会话内递增序号';
 COMMENT ON COLUMN "session_message"."visible_to" IS '可见范围码：1-客户与坐席都可见、2-仅坐席可见（内部备注）';
 COMMENT ON COLUMN "session_message"."msg_type" IS '类型码：1-文本、2-图片、3-卡片、4-事件、5-系统';
 COMMENT ON COLUMN "session_message"."sender_type" IS '发送方码：1-客户、2-坐席、3-机器人、4-系统';
@@ -223,6 +229,11 @@ COMMENT ON COLUMN "session_message"."ref_id" IS '引用消息ID';
 COMMENT ON COLUMN "session_message"."status" IS '状态码：1-已发送、2-已送达、3-已读、4-失败';
 COMMENT ON COLUMN "session_message"."send_time" IS '发送时间';
 CREATE INDEX IF NOT EXISTS "idx_session_message_tenant_session_time" ON "session_message" ("tenant_code", "session_id", "send_time");
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_session_client_msg"
+  ON "session_message" ("tenant_code", "session_id", "client_msg_no")
+  WHERE "client_msg_no" IS NOT NULL;
+CREATE INDEX IF NOT EXISTS "idx_session_message_seq"
+  ON "session_message" ("tenant_code", "session_id", "seq");
 
 CREATE TABLE IF NOT EXISTS "customer" (
   "id" BIGINT NOT NULL,

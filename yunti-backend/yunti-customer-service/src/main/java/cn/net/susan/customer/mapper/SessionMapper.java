@@ -47,4 +47,14 @@ public interface SessionMapper extends BaseMapper<Session> {
             @Param("newAgentId") Long newAgentId,
             @Param("newStatus") int newStatus
     );
+
+    Long nextMessageSeq(
+            @Param("tenantCode") String tenantCode,
+            @Param("sessionId") Long sessionId
+    );
+
+    Long lockSessionForMessage(
+            @Param("tenantCode") String tenantCode,
+            @Param("sessionId") Long sessionId
+    );
 }

@@ -54,6 +54,9 @@ public class Session {
 
     private Integer csatScore;
 
+    /** 会话已分配的最大消息序号（新消息 = 该值 + 1） */
+    private Long lastMsgSeq;
+
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;

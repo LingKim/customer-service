@@ -4,18 +4,19 @@
 
     <!-- 按会话取对话记录：只取文本/卡片类消息，按时间正序，供 AI 质检还原真实会话 -->
     <select id="selectDialog" resultType="cn.net.susan.customer.entity.SessionMessage">
-        SELECT id, tenant_code, session_id, msg_no, msg_type, sender_type, sender_id, content, send_time
+        SELECT id, tenant_code, session_id, msg_no, client_msg_no, seq, msg_type, sender_type, sender_id,
+               content, send_time
           FROM session_message
          WHERE tenant_code = #{tenantCode}
            AND session_id = #{sessionId}
            AND is_deleted = FALSE
-         ORDER BY send_time, id
+         ORDER BY seq, id
          LIMIT #{limit}
     </select>
-    <!-- 聊天记录：按时间倒序取一页（beforeId 向上翻页）；visibleTo=1 时过滤掉坐席内部备注 -->
+    <!-- 聊天记录：按序号倒序取一页（beforeId 向上翻页）；visibleTo=1 时过滤掉坐席内部备注 -->
     <select id="selectBySession" resultType="cn.net.susan.customer.entity.SessionMessage">
-        SELECT id, tenant_code, session_id, msg_no, msg_type, sender_type, sender_id, content,
-               status, visible_to, send_time
+        SELECT id, tenant_code, session_id, msg_no, client_msg_no, seq, msg_type, sender_type, sender_id,
+               content, status, visible_to, send_time
           FROM session_message
          WHERE tenant_code = #{tenantCode}
            AND session_id = #{sessionId}
@@ -26,7 +27,33 @@
            <if test="visibleTo != null">
            AND visible_to = #{visibleTo}
            </if>
-         ORDER BY id DESC
+         ORDER BY seq DESC, id DESC
+         LIMIT #{limit}
+    </select>
+    <!-- 幂等判重：同一个会话里 client_msg_no 唯一 -->
+    <select id="selectByClientMsgNo" resultType="cn.net.susan.customer.entity.SessionMessage">
+        SELECT id, tenant_code, session_id, msg_no, client_msg_no, seq, msg_type, sender_type, sender_id,
+               content, status, visible_to, send_time
+          FROM session_message
+         WHERE tenant_code = #{tenantCode}
+           AND session_id = #{sessionId}
+           AND client_msg_no = #{clientMsgNo}
+           AND is_deleted = FALSE
+         LIMIT 1
+    </select>
+    <!-- 增量补拉：取序号大于 afterSeq 的消息，正序返回 -->
+    <select id="selectAfterSeq" resultType="cn.net.susan.customer.entity.SessionMessage">
+        SELECT id, tenant_code, session_id, msg_no, client_msg_no, seq, msg_type, sender_type, sender_id,
+               content, status, visible_to, send_time
+          FROM session_message
+         WHERE tenant_code = #{tenantCode}
+           AND session_id = #{sessionId}
+           AND is_deleted = FALSE
+           AND seq &gt; #{afterSeq}
+           <if test="visibleTo != null">
+           AND visible_to = #{visibleTo}
+           </if>
+         ORDER BY seq, id
          LIMIT #{limit}
     </select>
 </mapper>

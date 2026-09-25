@@ -28,8 +28,14 @@ public class SessionMessage {
 
     private Long sessionId;
 
-    /** 消息编号（客户端幂等键） */
+    /** 消息编号（服务端生成，全局唯一） */
     private String msgNo;
+
+    /** 客户端消息号（幂等键）：同一条消息重发多少次，都只落一条 */
+    private String clientMsgNo;
+
+    /** 会话内序号：从 1 开始，双方按它排序 */
+    private Long seq;
 
     /** 类型码：1-文本、2-图片、3-卡片、4-事件、5-系统 */
     private Integer msgType;
