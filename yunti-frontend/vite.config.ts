@@ -24,6 +24,10 @@ export default defineConfig(({ mode }) => {
           target: apiTarget,
           changeOrigin: true,
         },
+        '/api/ai': {
+          target: apiTarget,
+          changeOrigin: true,
+        },
       },
     },
   }

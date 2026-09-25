@@ -35,6 +35,10 @@ spring:
               uri: ${YUNTI_OPS_SERVICE_URL:http://127.0.0.1:9095}
               predicates:
                 - Path=/api/ops/**
+            - id: yunti-ai-service
+              uri: ${YUNTI_AI_SERVICE_URL:http://127.0.0.1:9100}
+              predicates:
+                - Path=/api/ai/**
 
 management:
   endpoints:

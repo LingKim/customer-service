@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -20,6 +21,11 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
     kafka_bootstrap: str = "localhost:9092"
+    database_url: str = "postgresql://mac@127.0.0.1:5432/ai_db"
+    jwt_secret: str = Field(
+        default="yunti-customer-service-jwt-secret-please-change-in-prod-0123456789",
+        validation_alias="YUNTI_JWT_SECRET",
+    )
 
 @lru_cache
 def get_settings() -> Settings:

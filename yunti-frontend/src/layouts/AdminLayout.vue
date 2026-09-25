@@ -25,6 +25,10 @@
           <el-icon><Connection /></el-icon>
           <span>渠道接入</span>
         </el-menu-item>
+        <el-menu-item v-if="userStore.userType === 2" index="/modules/bot">
+          <el-icon><MagicStick /></el-icon>
+          <span>智能机器人</span>
+        </el-menu-item>
         <el-menu-item v-if="userStore.userType === 1" index="/admin/reviews">
           <el-icon><Stamp /></el-icon>
           <span>企业审核</span>

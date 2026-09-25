@@ -52,6 +52,12 @@ const router = createRouter({
           component: () => import('../views/channels/setup.vue'),
           meta: { title: '渠道接入流程', requiresEnterprise: true },
         },
+        {
+          path: 'modules/bot',
+          name: 'BotConfig',
+          component: () => import('../views/bot/index.vue'),
+          meta: { title: '智能机器人', requiresEnterprise: true },
+        },
       ],
     },
     {
