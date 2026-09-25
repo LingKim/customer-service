@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getToken } from '../utils/auth'
 import { useUserStore } from '../stores/user'
+import { fetchMemberAccess } from '../api/member'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -18,6 +19,12 @@ const router = createRouter({
       meta: { title: '注册企业账号' },
     },
     {
+      path: '/invite/accept/:code',
+      name: 'InviteAccept',
+      component: () => import('../views/invite/accept.vue'),
+      meta: { title: '接受邀请' },
+    },
+    {
       path: '/',
       component: () => import('../layouts/AdminLayout.vue'),
       redirect: '/dashboard',
@@ -32,7 +39,7 @@ const router = createRouter({
           path: 'enterprise',
           name: 'EnterpriseReview',
           component: () => import('../views/enterprise/index.vue'),
-          meta: { title: '企业信息' },
+          meta: { title: '企业信息', requiresEnterprise: true, requiresManager: true },
         },
         {
           path: 'admin/reviews',
@@ -44,19 +51,25 @@ const router = createRouter({
           path: 'channels',
           name: 'Channels',
           component: () => import('../views/channels/index.vue'),
-          meta: { title: '渠道接入', requiresEnterprise: true },
+          meta: { title: '渠道接入', requiresEnterprise: true, requiresManager: true },
         },
         {
           path: 'channels/setup/:stage/:channelId?',
           name: 'ChannelSetup',
           component: () => import('../views/channels/setup.vue'),
-          meta: { title: '渠道接入流程', requiresEnterprise: true },
+          meta: { title: '渠道接入流程', requiresEnterprise: true, requiresManager: true },
         },
         {
           path: 'modules/bot',
           name: 'BotConfig',
           component: () => import('../views/bot/index.vue'),
-          meta: { title: '智能机器人', requiresEnterprise: true },
+          meta: { title: '智能机器人', requiresEnterprise: true, requiresManager: true },
+        },
+        {
+          path: 'members',
+          name: 'Members',
+          component: () => import('../views/members/index.vue'),
+          meta: { title: '成员管理', requiresEnterprise: true, requiresManager: true },
         },
       ],
     },
@@ -76,7 +89,7 @@ const router = createRouter({
 
 // 简单路由守卫：未登录跳登录页
 router.beforeEach(async (to) => {
-  if (!['Login', 'Register'].includes(String(to.name)) && !getToken()) {
+  if (!['Login', 'Register', 'InviteAccept'].includes(String(to.name)) && !getToken()) {
     return { name: 'Login', query: { redirect: to.fullPath } }
   }
   if (to.meta.requiresPlatform) {
@@ -93,6 +106,18 @@ router.beforeEach(async (to) => {
     }
     if (userStore.userType !== 2) return { name: 'Dashboard' }
     if (!userStore.tenantCode || userStore.tenantCode === 'PLATFORM') return { name: 'Guide' }
+  }
+  if (to.meta.requiresManager || to.name === 'Guide') {
+    const userStore = useUserStore()
+    if (!userStore.userId) {
+      try { await userStore.fetchProfile() } catch { return { name: 'Login' } }
+    }
+    if (userStore.userType === 2 && userStore.tenantCode !== 'PLATFORM') {
+      try {
+        const access = await fetchMemberAccess()
+        if (!access.canManage) return { name: 'Dashboard' }
+      } catch { return { name: 'Dashboard' } }
+    }
   }
   return true
 })

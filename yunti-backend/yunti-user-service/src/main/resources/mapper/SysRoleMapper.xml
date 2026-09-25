@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.user.mapper.SysRoleMapper">
+
+    <!-- 并发初始化角色：命中 uk_tenant_role_code 时静默忽略，不打断事务 -->
+    <insert id="insertIgnore">
+        INSERT INTO sys_role
+               (id, tenant_code, role_code, role_name, role_type, is_fixed, is_enabled, is_deleted)
+        VALUES (#{id}, #{tenantCode}, #{roleCode}, #{roleName}, #{roleType}, #{isFixed}, #{isEnabled}, #{deleted})
+        ON CONFLICT (tenant_code, role_code) DO NOTHING
+    </insert>
+</mapper>

@@ -17,17 +17,20 @@
           <el-icon><DataBoard /></el-icon>
           <span>数据概览</span>
         </el-menu-item>
-        <el-menu-item v-if="userStore.userType !== 1" index="/enterprise">
+        <el-menu-item v-if="userStore.userType === 2 && canManage" index="/enterprise">
           <el-icon><OfficeBuilding /></el-icon>
           <span>企业信息</span>
         </el-menu-item>
-        <el-menu-item v-if="userStore.userType === 2" index="/channels">
+        <el-menu-item v-if="userStore.userType === 2 && canManage" index="/channels">
           <el-icon><Connection /></el-icon>
           <span>渠道接入</span>
         </el-menu-item>
-        <el-menu-item v-if="userStore.userType === 2" index="/modules/bot">
+        <el-menu-item v-if="userStore.userType === 2 && canManage" index="/modules/bot">
           <el-icon><MagicStick /></el-icon>
           <span>智能机器人</span>
+        </el-menu-item>
+        <el-menu-item v-if="userStore.userType === 2 && canManage" index="/members">
+          <span>成员管理</span>
         </el-menu-item>
         <el-menu-item v-if="userStore.userType === 1" index="/admin/reviews">
           <el-icon><Stamp /></el-icon>
@@ -63,20 +66,29 @@
   </el-container>
 </template>
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getEnterpriseGuide } from '../api/enterprise'
+import { fetchMemberAccess } from '../api/member'
 import { useUserStore } from '../stores/user'
 
 const router = useRouter()
 const userStore = useUserStore()
 const DONE_KEY = 'yunti_onboard_done'
+const canManage = ref(false)
 
 onMounted(async () => {
   try {
     if (!userStore.userId) await userStore.fetchProfile()
     if (userStore.userType === 1) return
+    if (userStore.tenantCode && userStore.tenantCode !== 'PLATFORM') {
+      const access = await fetchMemberAccess()
+      canManage.value = access.canManage
+      if (!access.canManage) return
+    } else {
+      canManage.value = true
+    }
     const guide = await getEnterpriseGuide()
     const done = localStorage.getItem(DONE_KEY) === 'true'
     const routeName = router.currentRoute.value.name

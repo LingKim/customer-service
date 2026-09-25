@@ -27,6 +27,16 @@ yunti:
   tenant:
     # 租户服务内部接口地址（企业资料落库）
     internal-base-url: ${YUNTI_TENANT_INTERNAL_URL:http://127.0.0.1:9092}
+  mail:
+    enabled: ${YUNTI_MAIL_ENABLED:}
+    host: ${YUNTI_MAIL_HOST:smtp.163.com}
+    port: ${YUNTI_MAIL_PORT:465}
+    username: ${YUNTI_MAIL_USERNAME:}
+    password: ${YUNTI_MAIL_PASSWORD:}
+    from-name: 云梯智能客服
+    from-address: ${YUNTI_MAIL_FROM_ADDRESS:}
+  member-invite:
+    frontend-url: ${YUNTI_MEMBER_FRONTEND_URL:http://localhost:5173}
 
 management:
   endpoints:

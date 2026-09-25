@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.user.mapper.TenantMemberMapper">
+
+    <!-- 并发建立成员关系：命中 uk_tenant_user 时静默忽略，不打断事务 -->
+    <insert id="insertIgnore">
+        INSERT INTO tenant_member
+               (id, tenant_code, user_id, join_time, status, creator, is_deleted)
+        VALUES (#{id}, #{tenantCode}, #{userId}, COALESCE(#{joinTime}, CURRENT_TIMESTAMP), 1,
+                #{creator}, FALSE)
+        ON CONFLICT (tenant_code, user_id) DO NOTHING
+    </insert>
+</mapper>

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.user.mapper.MemberInviteMapper">
+
+    <select id="selectValidForUpdate" resultType="cn.net.susan.user.entity.MemberInvite">
+        SELECT * FROM member_invite
+         WHERE invite_code = #{inviteCode} AND status = 1 AND is_deleted = FALSE
+         FOR UPDATE
+    </select>
+
+    <!-- 成员邀请列表：关联邀请人、使用人、角色 -->
+    <select id="selectInviteList" resultType="java.util.Map">
+        SELECT mi.id              AS invite_id,
+               mi.invite_code,
+               mi.inviter_id,
+               mi.invitee_phone,
+               mi.invitee_email,
+               mi.role_id,
+               mi.status          AS invite_status,
+               mi.used_by,
+               mi.used_time,
+               mi.expire_time,
+               mi.create_time,
+               COALESCE(r.role_code, '') AS role_code,
+               COALESCE(r.role_name, '') AS role_name,
+               COALESCE(ui.name, '')     AS inviter_name,
+               COALESCE(uu.name, '')     AS used_by_name
+          FROM member_invite mi
+          LEFT JOIN sys_role r
+                 ON r.id = mi.role_id
+                AND r.is_deleted = FALSE
+          LEFT JOIN sys_user ui
+                 ON ui.id = mi.inviter_id
+                AND ui.is_deleted = FALSE
+          LEFT JOIN sys_user uu
+                 ON uu.id = mi.used_by
+                AND uu.is_deleted = FALSE
+         WHERE mi.tenant_code = #{tenantCode}
+           AND mi.is_deleted = FALSE
+         ORDER BY mi.create_time DESC, mi.id DESC
+    </select>
+</mapper>

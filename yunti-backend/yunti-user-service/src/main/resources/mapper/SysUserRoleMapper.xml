@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.user.mapper.SysUserRoleMapper">
+
+    <!-- 并发绑定角色：命中 uk_tenant_user_role 时静默忽略，不打断事务 -->
+    <insert id="insertIgnore">
+        INSERT INTO sys_user_role
+               (id, tenant_code, user_id, role_id, create_time)
+        VALUES (#{id}, #{tenantCode}, #{userId}, #{roleId}, COALESCE(#{createTime}, CURRENT_TIMESTAMP))
+        ON CONFLICT (tenant_code, user_id, role_id) DO NOTHING
+    </insert>
+</mapper>

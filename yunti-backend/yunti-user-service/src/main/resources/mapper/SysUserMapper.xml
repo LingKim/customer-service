@@ -22,4 +22,16 @@
          WHERE is_deleted = FALSE
            AND (lower(phone) = lower(#{phone}) OR lower(email) = lower(#{email}))
     </select>
+    <select id="selectEnterpriseMembers" resultType="java.util.Map">
+        SELECT u.id AS user_id, u.user_no, u.name AS member_name, u.phone, u.email, u.avatar,
+               u.status AS user_status, u.last_login_time, tm.join_time,
+               COALESCE(r.role_code, 'ADMIN') AS role_code,
+               COALESCE(r.role_name, '企业管理员') AS role_name
+          FROM tenant_member tm
+          JOIN sys_user u ON u.id = tm.user_id AND u.tenant_code = tm.tenant_code AND u.is_deleted = FALSE
+          LEFT JOIN sys_user_role ur ON ur.user_id = u.id AND ur.tenant_code = tm.tenant_code
+          LEFT JOIN sys_role r ON r.id = ur.role_id AND r.tenant_code = tm.tenant_code AND r.is_deleted = FALSE
+         WHERE tm.tenant_code = #{tenantCode} AND tm.is_deleted = FALSE AND tm.status = 1
+         ORDER BY tm.join_time DESC, u.id DESC
+    </select>
 </mapper>

@@ -5,6 +5,9 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.util.List;
+import java.util.Map;
+
 /**
  * sys_user 用户表 Mapper。
  */
@@ -20,4 +23,6 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
      * 判断手机号或邮箱是否已被注册。
      */
     int countByPhoneOrEmail(@Param("phone") String phone, @Param("email") String email);
+
+    List<Map<String, Object>> selectEnterpriseMembers(@Param("tenantCode") String tenantCode);
 }
