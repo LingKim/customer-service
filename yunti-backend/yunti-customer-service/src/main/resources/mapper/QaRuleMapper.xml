@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.customer.mapper.QaRuleMapper">
+
+    <!-- 并发初始化规则：命中（tenant_code, rule_name）且未删除时忽略，避免重复数据 -->
+    <insert id="insertIgnore">
+        INSERT INTO qa_rule
+               (id, tenant_code, rule_name, rule_type, rule_content, weight, is_enabled,
+                create_time, update_time, creator, editor, is_deleted)
+        VALUES (#{id}, #{tenantCode}, #{ruleName}, #{ruleType}, #{ruleContent}, #{weight},
+                #{isEnabled}, COALESCE(#{createTime}, CURRENT_TIMESTAMP),
+                COALESCE(#{updateTime}, CURRENT_TIMESTAMP), #{creator}, #{editor}, FALSE)
+        ON CONFLICT (tenant_code, rule_name) WHERE is_deleted = FALSE DO NOTHING
+    </insert>
+</mapper>

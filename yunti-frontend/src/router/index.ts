@@ -71,6 +71,12 @@ const router = createRouter({
           component: () => import('../views/members/index.vue'),
           meta: { title: '成员管理', requiresEnterprise: true, requiresManager: true },
         },
+        {
+          path: 'modules/qa',
+          name: 'QualityAssurance',
+          component: () => import('../views/qa/index.vue'),
+          meta: { title: '质检中心', requiresEnterprise: true },
+        },
       ],
     },
     {
