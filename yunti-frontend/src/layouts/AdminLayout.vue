@@ -17,9 +17,13 @@
           <el-icon><DataBoard /></el-icon>
           <span>数据概览</span>
         </el-menu-item>
-        <el-menu-item index="/enterprise">
+        <el-menu-item v-if="userStore.userType !== 1" index="/enterprise">
           <el-icon><OfficeBuilding /></el-icon>
           <span>企业信息</span>
+        </el-menu-item>
+        <el-menu-item v-if="userStore.userType === 1" index="/admin/reviews">
+          <el-icon><Stamp /></el-icon>
+          <span>企业审核</span>
         </el-menu-item>
       </el-menu>
     </el-aside>

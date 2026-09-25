@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getToken } from '../utils/auth'
+import { useUserStore } from '../stores/user'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -33,6 +34,12 @@ const router = createRouter({
           component: () => import('../views/enterprise/index.vue'),
           meta: { title: '企业信息' },
         },
+        {
+          path: 'admin/reviews',
+          name: 'PlatformReview',
+          component: () => import('../views/admin/review/index.vue'),
+          meta: { title: '企业审核', requiresPlatform: true },
+        },
       ],
     },
     {
@@ -50,9 +57,16 @@ const router = createRouter({
 })
 
 // 简单路由守卫：未登录跳登录页
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   if (!['Login', 'Register'].includes(String(to.name)) && !getToken()) {
     return { name: 'Login', query: { redirect: to.fullPath } }
+  }
+  if (to.meta.requiresPlatform) {
+    const userStore = useUserStore()
+    if (!userStore.userId) {
+      try { await userStore.fetchProfile() } catch { return { name: 'Login' } }
+    }
+    if (userStore.userType !== 1) return { name: 'Dashboard' }
   }
   return true
 })

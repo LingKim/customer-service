@@ -25,6 +25,9 @@
          LIMIT 1
            FOR UPDATE
     </select>
+    <select id="findByIdForUpdate" resultType="cn.net.susan.tenant.entity.Enterprise">
+        SELECT * FROM enterprise WHERE id = #{enterpriseId} AND is_deleted = FALSE FOR UPDATE
+    </select>
     <!-- 查询指定日期前缀下最新企业编码（含逻辑删除，避免编码复用冲突） -->
     <select id="findLatestCodeByDatePrefix" resultType="java.lang.String">
         SELECT enterprise_code

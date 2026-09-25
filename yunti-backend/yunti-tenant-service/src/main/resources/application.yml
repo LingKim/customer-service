@@ -23,6 +23,8 @@ yunti:
   customer:
     # customer-service 内部接口地址（提交审核前校验营业执照文件归属）
     internal-base-url: ${YUNTI_CUSTOMER_INTERNAL_URL:http://127.0.0.1:9093}
+  user:
+    internal-base-url: ${YUNTI_USER_INTERNAL_URL:http://127.0.0.1:9091}
 
 management:
   endpoints:

@@ -95,7 +95,10 @@
           <el-icon :size="58" color="#10b981"><CircleCheckFilled /></el-icon>
           <h1>企业已完成开通</h1>
           <p>租户编码：{{ guide.tenantCode || '待分配' }}</p>
-          <el-button type="primary" size="large" @click="enterWorkspace">进入工作台</el-button>
+          <p v-if="userStore.tenantCode === 'PLATFORM'">租户已开通，请重新登录以获取新的租户身份。</p>
+                    <el-button type="primary" size="large" @click="enterWorkspace">
+            {{ userStore.tenantCode === 'PLATFORM' ? '重新登录' : '进入工作台' }}
+          </el-button>
         </el-card>
       </template>
     </main>
@@ -160,6 +163,10 @@ async function loadGuide() {
   loadError.value = ''
   try {
     if (!userStore.userId) await userStore.fetchProfile()
+    if (userStore.userType === 1) {
+      await router.replace('/admin/reviews')
+      return
+    }
     applyGuide(await getEnterpriseGuide())
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : '加载失败，请稍后重试'
@@ -236,7 +243,16 @@ function resetLicense() { releasePreview(); licenseFileId.value = null; licenseF
 function startTimer() { stopTimer(); reviewTimer = window.setInterval(refreshReview, import.meta.env.VITE_USE_MOCK === 'true' ? 1000 : 30000) }
 function stopTimer() { if (reviewTimer) window.clearInterval(reviewTimer); reviewTimer = undefined }
 async function refreshReview() { try { const state = await getEnterpriseGuide(); if (state.stage !== 'PENDING_REVIEW') applyGuide(state) } catch { /* 下次继续 */ } }
-function enterWorkspace() { localStorage.setItem(DONE_KEY, 'true'); router.push('/dashboard') }
+function enterWorkspace() {
+  if (userStore.tenantCode === 'PLATFORM') {
+    userStore.reset()
+    localStorage.removeItem(DONE_KEY)
+    router.push('/login')
+  } else {
+    localStorage.setItem(DONE_KEY, 'true')
+    router.push('/dashboard')
+  }
+}
 function openLogout() { logoutVisible.value = true }
 function doLogout() { userStore.reset(); localStorage.removeItem(DONE_KEY); router.push('/login') }
 function formatTime(value?: string) { return value ? new Date(value).toLocaleString('zh-CN') : '—' }

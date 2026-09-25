@@ -118,7 +118,8 @@ public class EnterpriseLicenseFileService {
         boolean creatorOwned = String.valueOf(user.userId()).equals(meta.getCreator());
         boolean tenantOwned = hasActiveTenant(user.tenantCode())
                 && user.tenantCode().equals(meta.getTenantCode());
-        if (!creatorOwned && !tenantOwned) {
+        boolean platformReviewer = user.userType() == 1;
+        if (!creatorOwned && !tenantOwned && !platformReviewer) {
             throw new BizException(ResultCode.FORBIDDEN);
         }
         Resource resource;

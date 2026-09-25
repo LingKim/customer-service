@@ -21,6 +21,8 @@ public interface EnterpriseMapper extends BaseMapper<Enterprise> {
      */
     Enterprise findByApplicantIdForUpdate(@Param("applicantId") String applicantId);
 
+    Enterprise findByIdForUpdate(@Param("enterpriseId") long enterpriseId);
+
     /**
      * 查询指定日期前缀下最新企业编码（含逻辑删除，避免编码复用冲突）。
      */

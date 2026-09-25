@@ -106,6 +106,16 @@ public class EnterpriseOnboardingService {
                 .deleted(false)
                 .build();
         enterpriseReviewMapper.insert(review);
+        if (ENTERPRISE_REJECTED == enterprise.getStatus()) {
+            LambdaUpdateWrapper<Enterprise> resetStatus = Wrappers.lambdaUpdate(Enterprise.class)
+                    .eq(Enterprise::getId, enterprise.getId())
+                    .eq(Enterprise::getDeleted, false)
+                    .eq(Enterprise::getStatus, ENTERPRISE_REJECTED)
+                    .set(Enterprise::getStatus, ENTERPRISE_PENDING)
+                    .set(Enterprise::getUpdateTime, now);
+            enterpriseMapper.update(null, resetStatus);
+            enterprise.setStatus(ENTERPRISE_PENDING);
+        }
         updateEnterpriseProfile(enterprise, request);
         return toState(enterprise, review, STAGE_PENDING_REVIEW);
     }

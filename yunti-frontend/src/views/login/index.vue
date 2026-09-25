@@ -126,7 +126,7 @@ async function handleLogin() {
       captchaCode: form.captchaCode,
     })
     ElMessage.success('登录成功')
-    const redirect = (route.query.redirect as string) || '/dashboard'
+    const redirect = userStore.userType === 1 ? '/admin/reviews' : (route.query.redirect as string) || '/dashboard'
     router.push(redirect)
   } catch {
     refreshCaptcha()

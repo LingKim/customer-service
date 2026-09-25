@@ -1,4 +1,5 @@
 import { request } from './request'
+import { getToken } from '../utils/auth'
 import type {
   CaptchaResult,
   ChangePasswordParams,
@@ -10,19 +11,28 @@ import type {
 } from '../types'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
+const MOCK_GUIDE_KEY = 'yunti_mock_enterprise_guide'
+
+function mockTenantCode(): string {
+  try {
+    const guide = JSON.parse(localStorage.getItem(MOCK_GUIDE_KEY) || '{}') as { tenantCode?: string }
+    return guide.tenantCode || 'PLATFORM'
+  } catch { return 'PLATFORM' }
+}
 
 /** 开发环境 Mock：后端联调时置 VITE_USE_MOCK=false */
 function mockLogin(params: LoginParams): Promise<LoginResult> {
   return new Promise((resolve, reject) => {
     setTimeout(() => {
       if (params.account && params.password.length >= 6) {
+        const platform = params.account.trim().toLowerCase() === 'admin@yunti.example.com'
         resolve({
-          token: 'mock-token-' + Date.now(),
-          userId: '325036800000001001',
-          userNo: 'U00000000000000001',
-          name: '张伟',
-          userType: 2,
-          tenantCode: 'PLATFORM',
+          token: `mock-token-${platform ? 'admin' : 'enterprise'}-${Date.now()}`,
+          userId: platform ? '325036800000001099' : '325036800000001001',
+          userNo: platform ? 'U90000000000000001' : 'U00000000000000001',
+          name: platform ? '平台管理员' : '张伟',
+          userType: platform ? 1 : 2,
+          tenantCode: platform ? 'PLATFORM' : mockTenantCode(),
         })
       } else {
         reject(new Error('账号或密码错误'))
@@ -33,6 +43,10 @@ function mockLogin(params: LoginParams): Promise<LoginResult> {
 
 /** 获取图形验证码（登录 / 注册共用） */
 export function captchaApi(): Promise<CaptchaResult> {
+  if (USE_MOCK) {
+    const imageBase64 = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="118" height="40"><rect width="118" height="40" fill="#eef4ff"/><text x="32" y="29" font-size="24" fill="#1d4ed8">1234</text></svg>')}`
+    return Promise.resolve({ captchaId: 'mock', imageBase64, debugCode: '1234' })
+  }
   return request<CaptchaResult>({
     url: '/user/auth/captcha',
     method: 'get',
@@ -63,12 +77,13 @@ export function loginApi(data: LoginParams): Promise<LoginResult> {
 /** 当前登录用户（恢复会话 / 判断引导状态） */
 export function meApi(): Promise<MeResult> {
   if (USE_MOCK) {
+    const platform = getToken().startsWith('mock-token-admin-')
     return Promise.resolve({
-      userId: '325036800000001001',
-      userNo: 'U00000000000000001',
-      name: '张伟',
-      userType: 2,
-      tenantCode: 'PLATFORM',
+      userId: platform ? '325036800000001099' : '325036800000001001',
+      userNo: platform ? 'U90000000000000001' : 'U00000000000000001',
+      name: platform ? '平台管理员' : '张伟',
+      userType: platform ? 1 : 2,
+      tenantCode: platform ? 'PLATFORM' : mockTenantCode(),
     })
   }
   return request<MeResult>({

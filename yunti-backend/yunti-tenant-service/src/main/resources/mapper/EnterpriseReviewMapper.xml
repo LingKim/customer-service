@@ -19,4 +19,30 @@
           FROM enterprise_review
          WHERE enterprise_id = #{enterpriseId} AND is_deleted = FALSE
     </select>
+
+    <select id="findByIdForUpdate" resultType="cn.net.susan.tenant.entity.EnterpriseReview">
+        SELECT * FROM enterprise_review WHERE id = #{reviewId} AND is_deleted = FALSE FOR UPDATE
+    </select>
+
+    <select id="selectReviewAdminPage" resultType="cn.net.susan.tenant.admin.dto.ReviewPageVO">
+        SELECT CAST(r.id AS VARCHAR) AS id,
+               CAST(r.enterprise_id AS VARCHAR) AS enterprise_id,
+               e.enterprise_code, e.tenant_code, r.apply_no, r.version_no,
+               CAST(r.applicant_id AS VARCHAR) AS applicant_id,
+               r.company_name, r.industry, r.scale, r.contact_name, r.contact_phone,
+               r.contact_email, r.license_no, r.register_address, r.legal_person,
+               CAST(r.license_file_id AS VARCHAR) AS license_file_id,
+               r.status, r.reject_reason, CAST(r.reviewer_id AS VARCHAR) AS reviewer_id,
+               r.review_time, r.submit_time, e.status AS enterprise_status
+          FROM enterprise_review r
+          JOIN enterprise e ON e.id = r.enterprise_id AND e.is_deleted = FALSE
+         WHERE r.is_deleted = FALSE
+           <if test="status != null">AND r.status = #{status}</if>
+           <if test="keyword != null and keyword != ''">
+             AND (r.company_name ILIKE CONCAT('%', #{keyword}, '%')
+                  OR r.apply_no ILIKE CONCAT('%', #{keyword}, '%')
+                  OR r.contact_name ILIKE CONCAT('%', #{keyword}, '%'))
+           </if>
+         ORDER BY r.submit_time DESC, r.id DESC
+    </select>
 </mapper>
