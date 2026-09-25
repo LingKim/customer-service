@@ -29,11 +29,29 @@ CREATE TABLE IF NOT EXISTS skill_group (
   description VARCHAR(255),
   is_default BOOLEAN NOT NULL DEFAULT FALSE,
   is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  overflow_after_seconds INTEGER NOT NULL DEFAULT 60,
   create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   creator VARCHAR(64), editor VARCHAR(64), is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
   PRIMARY KEY (id), CONSTRAINT uk_skill_group_tenant_name UNIQUE (tenant_code, name)
 );
+
+CREATE TABLE IF NOT EXISTS agent_status (
+  id BIGINT NOT NULL,
+  tenant_code VARCHAR(16) NOT NULL,
+  agent_id BIGINT NOT NULL,
+  status SMALLINT NOT NULL DEFAULT 1,
+  max_concurrency SMALLINT NOT NULL DEFAULT 5,
+  is_connected BOOLEAN NOT NULL DEFAULT FALSE,
+  status_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  creator VARCHAR(64), editor VARCHAR(64), is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+  CONSTRAINT ck_agent_status_status CHECK (status IN (1, 2, 3)),
+  PRIMARY KEY (id), CONSTRAINT uk_tenant_agent_status UNIQUE (tenant_code, agent_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_status_tenant_status ON agent_status (tenant_code, status);
 
 CREATE TABLE IF NOT EXISTS channel (
   id BIGINT NOT NULL,
@@ -186,6 +204,8 @@ COMMENT ON COLUMN "session"."end_time" IS '结束时间';
 COMMENT ON COLUMN "session"."csat_score" IS '满意度评分1-5';
 CREATE INDEX IF NOT EXISTS "idx_session_tenant_status_time" ON "session" ("tenant_code", "status", "create_time");
 CREATE INDEX IF NOT EXISTS "idx_session_tenant_customer" ON "session" ("tenant_code", "customer_id");
+CREATE INDEX IF NOT EXISTS "idx_session_queue" ON "session" ("tenant_code", "start_time")
+  WHERE "agent_id" IS NULL AND "is_deleted" = FALSE;
 
 CREATE TABLE IF NOT EXISTS "session_message" (
   "id" BIGINT NOT NULL,

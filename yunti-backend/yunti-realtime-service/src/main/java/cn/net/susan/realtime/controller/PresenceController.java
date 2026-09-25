@@ -5,12 +5,19 @@ import cn.net.susan.common.exception.BizException;
 import cn.net.susan.realtime.security.RealtimePrincipal;
 import cn.net.susan.realtime.security.RealtimeTokenParser;
 import cn.net.susan.realtime.ws.ConnectionRegistry;
+import cn.net.susan.realtime.ws.RealtimeWebSocketHandler;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 
 /**
  * 在线状态查询：坐席工作台定期（或切回前台时）用 HTTP 对一次账。
@@ -26,10 +33,19 @@ public class PresenceController {
 
     private final ConnectionRegistry registry;
     private final RealtimeTokenParser tokenParser;
+    private final RealtimeWebSocketHandler handler;
+    private final String sharedSecret;
 
-    public PresenceController(ConnectionRegistry registry, RealtimeTokenParser tokenParser) {
+    public PresenceController(
+            ConnectionRegistry registry,
+            RealtimeTokenParser tokenParser,
+            RealtimeWebSocketHandler handler,
+            @Value("${yunti.internal.shared-secret:}") String sharedSecret
+    ) {
         this.registry = registry;
         this.tokenParser = tokenParser;
+        this.handler = handler;
+        this.sharedSecret = sharedSecret;
     }
 
     /**
@@ -59,5 +75,26 @@ public class PresenceController {
      * 在线快照。
      */
     public record PresenceView(List<String> onlineSessions) {
+    }
+
+    /**
+     * 内部接口：customer-service 智能路由分配成功后调用，通知坐席"你被派单了"。
+     */
+    @PostMapping("/internal/assigned")
+    public ApiResponse<Map<String, Object>> assigned(
+            @RequestHeader(value = "X-Yunti-Internal-Secret", required = false) String internalSecret,
+            @RequestBody AssignedBody body) {
+        if (sharedSecret == null || sharedSecret.isBlank() || internalSecret == null || internalSecret.isBlank()
+                || !MessageDigest.isEqual(sharedSecret.getBytes(StandardCharsets.UTF_8),
+                        internalSecret.getBytes(StandardCharsets.UTF_8))) {
+            throw new BizException(40301, "内部接口未授权");
+        }
+        int delivered = handler.notifyAssigned(
+                body.tenantCode(), body.agentId(), body.sessionNo(), body.reason());
+        return ApiResponse.ok(Map.of("delivered", delivered));
+    }
+
+    /** 自动接入通知请求体 */
+    public record AssignedBody(String tenantCode, long agentId, String sessionNo, String reason) {
     }
 }

@@ -4,9 +4,9 @@ import { request } from '../request'
 export interface SessionItem {
   sessionNo: string
   status: number
-  agentId?: number | null
-  channelId?: number | null
-  customerId?: number | null
+  agentId?: string | null
+  channelId?: string | null
+  customerId?: string | null
   customerName?: string | null
   customerLevel?: number | null
   source?: string | null
@@ -28,9 +28,9 @@ export interface SessionMessageItem {
   clientMsgNo?: string | null
   /** 会话内序号：排序与增量补拉的游标 */
   seq?: number | null
-  sessionId?: number
+  sessionId?: string
   senderType: number
-  senderId?: number | null
+  senderId?: string | null
   msgType: number
   content: string
   /** 可见范围：1-客户与坐席都可见、2-仅坐席可见（内部备注） */
@@ -70,7 +70,7 @@ export function listSessions(params: {
 /** 会话流转记录 */
 export interface SessionEventItem {
 eventType: number
-operatorId?: number | null
+operatorId?: string | null
 fromValue?: string | null
 toValue?: string | null
 remark?: string | null

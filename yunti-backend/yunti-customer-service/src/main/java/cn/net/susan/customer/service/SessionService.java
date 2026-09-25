@@ -20,6 +20,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -92,6 +93,8 @@ public class SessionService {
     private final ChannelKeyMapper channelKeyMapper;
     private final VisitorTokenService visitorTokenService;
     private final SnowflakeIdGenerator idGenerator;
+    /** 智能路由：延迟注入，避免和 SessionService 构造循环依赖 */
+    private final ObjectProvider<RoutingService> routingProvider;
 
     public SessionService(
             SessionMapper sessionMapper,
@@ -101,7 +104,8 @@ public class SessionService {
             ChannelMapper channelMapper,
             ChannelKeyMapper channelKeyMapper,
             VisitorTokenService visitorTokenService,
-            SnowflakeIdGenerator idGenerator
+            SnowflakeIdGenerator idGenerator,
+            ObjectProvider<RoutingService> routingProvider
     ) {
         this.sessionMapper = sessionMapper;
         this.sessionMessageMapper = sessionMessageMapper;
@@ -111,6 +115,7 @@ public class SessionService {
         this.channelKeyMapper = channelKeyMapper;
         this.visitorTokenService = visitorTokenService;
         this.idGenerator = idGenerator;
+        this.routingProvider = routingProvider;
     }
 
     /**
@@ -152,6 +157,8 @@ public class SessionService {
             appendSystemMessage(tenant, session, "访客进入会话，等待客服接入");
             log.info("访客会话创建 tenant={} sessionNo={} channel={} customerNo={}",
                     tenant, session.getSessionNo(), channel.getName(), customer.getCustomerNo());
+            // 进线即路由：有在线且接得下的人就直接分过去，不用等坐席手点
+            routeQuietly(tenant, session.getSessionNo());
         }
 
         String token = visitorTokenService.createToken(
@@ -394,6 +401,14 @@ public class SessionService {
      */
     @Transactional
     public Session claimSession(String tenantCode, String sessionNo, Long agentId) {
+        return claimSession(tenantCode, sessionNo, agentId, RoutingService.SOURCE_MANUAL);
+    }
+
+    /**
+     * 内部接口：坐席认领会话（带来源，用于区分"人工接入"和"智能路由分配"）。
+     */
+    @Transactional
+    public Session claimSession(String tenantCode, String sessionNo, Long agentId, String source) {
         Session session = requireSession(tenantCode, sessionNo);
         if (Integer.valueOf(STATUS_CLOSED).equals(session.getStatus())) {
             throw new BizException(40301, "会话已结束");
@@ -413,10 +428,28 @@ public class SessionService {
         }
         session.setAgentId(agentId);
         session.setStatus(STATUS_AGENT);
-        recordEvent(tenantCode, session.getId(), EVENT_ASSIGN, agentId, QUEUE_TARGET, String.valueOf(agentId), "坐席接入");
+        boolean byRouting = RoutingService.SOURCE_ROUTING.equals(source);
+        recordEvent(tenantCode, session.getId(), EVENT_ASSIGN, agentId, QUEUE_TARGET, String.valueOf(agentId),
+                byRouting ? "智能路由自动分配" : "坐席接入");
         appendSystemMessage(tenantCode, session, "人工客服已接入，很高兴为您服务");
-        log.info("坐席认领会话 tenant={} sessionNo={} agentId={}", tenantCode, sessionNo, agentId);
+        log.info("坐席认领会话 tenant={} sessionNo={} agentId={} 来源={}",
+                tenantCode, sessionNo, agentId, byRouting ? "智能路由" : "人工");
         return session;
+    }
+
+    /**
+     * 触发一次路由；失败不影响主流程（坐席照样能手动接入，定时任务也会兜底）。
+     */
+    private void routeQuietly(String tenantCode, String sessionNo) {
+        RoutingService routing = routingProvider.getIfAvailable();
+        if (routing == null) {
+            return;
+        }
+        try {
+            routing.assignIfPossible(tenantCode, sessionNo);
+        } catch (Exception e) {
+            log.warn("进线路由失败 tenant={} sessionNo={} error={}", tenantCode, sessionNo, e.getMessage());
+        }
     }
 
     /**
@@ -545,6 +578,8 @@ public class SessionService {
                     .tenantCode(tenant)
                     .sessionNo(generateSessionNo())
                     .channelId(channel.getId())
+                    // 渠道绑了技能组就带着走：路由据此只在组内找人，找不到再按排队策略升级
+                    .skillGroupId(channel.getSkillGroupId())
                     .customerId(customer.getId())
                     .status(STATUS_QUEUING)
                     .source(channel.getName())

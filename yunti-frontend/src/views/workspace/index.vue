@@ -9,6 +9,11 @@
         <span class="tip">我的接待 {{ myCount }} 单 / 待接待 {{ queueCount }} 单</span>
       </div>
       <div class="ws-filters">
+        <el-select v-model="myStatus" style="width: 132px" @change="changeMyStatus">
+          <el-option :value="1" label="在线 · 可接单" />
+          <el-option :value="2" label="忙碌 · 不接单" />
+          <el-option :value="3" label="小休" />
+        </el-select>
         <el-radio-group v-model="scope" size="default" @change="onScopeChange">
           <el-radio-button value="queue">待接待</el-radio-button>
           <el-radio-button value="mine">我的会话</el-radio-button>
@@ -62,7 +67,11 @@
             v-for="item in sessions"
             :key="item.sessionNo"
             class="list-item"
-            :class="{ active: item.sessionNo === activeSessionNo, waiting: !item.agentId && item.status !== 4 }"
+            :class="{
+              active: item.sessionNo === activeSessionNo,
+              waiting: !item.agentId && item.status !== 4,
+              'just-assigned': item.sessionNo === justAssigned
+            }"
             role="button"
             tabindex="0"
             @click="openSession(item)"
@@ -254,9 +263,10 @@ import {
   Service,
   Warning,
 } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 import { listChannels, type ChannelResult } from '../../api/customer/channel'
 import { fetchPresence } from '../../api/realtime'
+import { fetchAgentStatuses, updateAgentStatus, type AgentStatusItem } from '../../api/customer/agentStatus'
 import { openVisitorTestTab } from '../../utils/visitor'
 import {
   getSessionDetail,
@@ -289,6 +299,8 @@ const loadingHistory = ref(false)
 /** 还有没有更早的消息：没有就把「更早消息」置灰，避免点了没反应 */
 const hasMore = ref(false)
 const loadingMore = ref(false)
+/** 刚被智能路由分过来的会话号：列表里闪一下，让坐席知道"有新单进来了" */
+const justAssigned = ref('')
 const draft = ref('')
 const sending = ref(false)
 const noteMode = ref(false)
@@ -299,6 +311,10 @@ const members = ref<ColleagueOption[]>([])
 const agentOnline = ref<Record<string, { online: boolean; sessionCount: number }>>({})
 /** 用来做"模拟访客"的渠道：取本企业第一个生效且有密钥的渠道 */
 const visitorTestChannel = ref<ChannelResult | null>(null)
+/** 我的坐席状态：1-在线、2-忙碌、3-小休（智能路由据此决定是否派单） */
+const myStatus = ref(1)
+/** 同事状态：转接选人时显示"在线 / 忙碌 / 小休" */
+const agentStatuses = ref<Record<string, AgentStatusItem>>({})
 
 /** 访客在线状态：sessionNo → 是否在线（来自长连接的上下线事件，不用刷新页面） */
 const visitorPresence = ref<Record<string, boolean>>({})
@@ -315,7 +331,7 @@ const unreadMap = ref<Record<string, number>>({})
 const nowTick = ref(Date.now())
 
 const transferVisible = ref(false)
-const transferForm = ref<{ toAgentId?: number; remark: string }>({ remark: '' })
+const transferForm = ref<{ toAgentId?: string; remark: string }>({ remark: '' })
 const closeVisible = ref(false)
 const closeRemark = ref('')
 
@@ -330,10 +346,10 @@ const SYNC_INTERVAL_MS = 30000
 
 const isClosed = computed(() => activeSession.value?.status === 4)
 const isMine = computed(
-  () => !!activeSession.value?.agentId && Number(activeSession.value.agentId) === Number(userStore.userId),
+  () => !!activeSession.value?.agentId && String(activeSession.value.agentId) === String(userStore.userId),
 )
 const myCount = computed(
-  () => sessions.value.filter((item) => Number(item.agentId) === Number(userStore.userId)).length,
+  () => sessions.value.filter((item) => String(item.agentId) === String(userStore.userId)).length,
 )
 const queueCount = computed(() => sessions.value.filter((item) => !item.agentId).length)
 const scopeLabel = computed(() => {
@@ -380,15 +396,18 @@ const activeSessionTag = computed<{ text: string; type: 'info' | 'warning' | 'su
 })
 const assistAgents = computed(() =>
   assistAgentIds.value
-    .filter((id) => Number(id) !== Number(activeSession.value?.agentId))
+    .filter((id) => String(id) !== String(activeSession.value?.agentId))
     .map((id) => agentName(id)),
 )
 const transferCandidates = computed(() =>
   members.value
-    .filter((member) => Number(member.userId) !== Number(userStore.userId))
+    .filter((member) => String(member.userId) !== String(userStore.userId))
     .map((member) => {
       const status = agentOnline.value[String(member.userId)]
-      const state = status?.online ? `在线 · 接待 ${status.sessionCount} 单` : '离线'
+      const manual = agentStatuses.value[String(member.userId)]
+      const state = status?.online
+        ? `${manual?.statusText || '在线'} · 接待 ${status.sessionCount} 单`
+        : '离线'
       return { userId: member.userId, label: `${member.name}（${state}）` }
     }),
 )
@@ -411,7 +430,7 @@ const stateTagType = computed(() => (connectionState.value === 'open' ? 'success
 const stateClass = computed(() => `dot-${connectionState.value}`)
 
 onMounted(async () => {
-  await Promise.all([loadSessions(), loadMembers(), loadVisitorTestChannel()])
+  await Promise.all([loadSessions(), loadMembers(), loadVisitorTestChannel(), loadAgentStatuses()])
   connect()
   // 首屏也走一次 HTTP 对账：万一长连接连不上（或还没建好），在线状态也不会先错一屏
   void syncWorkspace()
@@ -463,6 +482,31 @@ async function loadVisitorTestChannel() {
 }
 
 /**
+ * 拉一次坐席状态：我的状态用于右上角切换，同事状态用于转接选人。
+ */
+async function loadAgentStatuses() {
+  try {
+    const view = await fetchAgentStatuses()
+    myStatus.value = view.mine.status
+    agentStatuses.value = Object.fromEntries(view.agents.map((item) => [item.agentId, item]))
+  } catch {
+    // 拿不到不影响接待
+  }
+}
+
+/** 切换状态：路由会立刻按新状态重新分配排队会话 */
+async function changeMyStatus(status: number) {
+  try {
+    const mine = await updateAgentStatus({ status })
+    myStatus.value = mine.status
+    ElMessage.success(`状态已切换为「${mine.statusText}」`)
+    await loadAgentStatuses()
+  } catch {
+    await loadAgentStatuses()
+  }
+}
+
+/**
  * 模拟访客：以本企业渠道身份打开访客页，坐席自己就能造一条测试会话。
  *
  * <p>固定用"新访客"打开：连点几次就是几条不同的待接待，方便测多会话；
@@ -498,8 +542,35 @@ function connect() {
   client.connect()
 }
 
-function handleMessage(message: RealtimeMessage) {
+async function handleMessage(message: RealtimeMessage) {
   switch (message.type) {
+    case 'ASSIGNED': {
+      // 智能路由把会话分给了我：切到"我的会话"、刷新列表、高亮这条会话
+      const payload = message.data ?? {}
+      const sessionNo = (payload.sessionNo as string | undefined) || message.sessionNo
+      if (!sessionNo) {
+        break
+      }
+      // 先给反馈，不等网络：刷新列表哪怕慢/失败，坐席也能看到"被派单了"
+      highlightAssigned(sessionNo)
+      ElNotification({
+        title: '已自动接入客户',
+        message: `智能路由把会话 ${sessionNo} 分配给了你，正在「我的会话」里等你接待`,
+        type: 'success',
+        duration: 8000,
+        onClick: () => {
+          const item = sessions.value.find((session) => session.sessionNo === sessionNo)
+          if (item) {
+            void openSession(item)
+          }
+        },
+      })
+      if (scope.value !== 'mine') {
+        scope.value = 'mine'
+      }
+      void loadSessions()
+      break
+    }
     case 'CONNECTED': {
       // 坐席上线：服务端给一份"哪些会话的客户此刻在线"的快照。
       // 这份快照是权威的——快照里没有的会话就是离线，
@@ -763,7 +834,7 @@ async function send() {
     msgId: localId,
     msgNo: localId,
     senderType: 2,
-    senderId: Number(userStore.userId),
+    senderId: String(userStore.userId),
     msgType: 1,
     content,
     visibleTo: isNote ? 2 : 1,
@@ -909,15 +980,15 @@ function agentName(agentId?: number | string | null) {
   if (agentId === null || agentId === undefined) {
     return ''
   }
-  const member = members.value.find((item) => Number(item.userId) === Number(agentId))
+  const member = members.value.find((item) => String(item.userId) === String(agentId))
   return member?.name || `客服#${agentId}`
 }
 
-function agentLabel(agentId?: number | null) {
+function agentLabel(agentId?: number | string | null) {
   if (!agentId) {
     return '待接待'
   }
-  return Number(agentId) === Number(userStore.userId) ? `我（${agentName(agentId)}）` : agentName(agentId)
+  return String(agentId) === String(userStore.userId) ? `我（${agentName(agentId)}）` : agentName(agentId)
 }
 
 function preview(item: SessionItem) {
@@ -936,7 +1007,7 @@ function preview(item: SessionItem) {
 
 /** 这张会话是不是我在接待 */
 function isMySession(item: SessionItem) {
-  return !!item.agentId && Number(item.agentId) === Number(userStore.userId)
+  return !!item.agentId && String(item.agentId) === String(userStore.userId)
 }
 
 /** 还没人认领、且没结束：属于「待接待」 */
@@ -1068,6 +1139,16 @@ function setVisitorPresence(sessionNo: string, online: boolean) {
     next[sessionNo] = Date.now()
   }
   offlineSince.value = next
+}
+
+/** 被自动分配的会话在列表里闪两下，提示"有新单进来了" */
+function highlightAssigned(sessionNo: string) {
+  justAssigned.value = sessionNo
+  window.setTimeout(() => {
+    if (justAssigned.value === sessionNo) {
+      justAssigned.value = ''
+    }
+  }, 5000)
 }
 
 /**
@@ -1392,6 +1473,24 @@ function fullTime(value?: string | null) {
   width: 3px;
   border-radius: 0 3px 3px 0;
   background: #2563eb;
+}
+
+/* 刚被自动接入：蓝色呼吸两下，坐席一眼看到新单 */
+.list-item.just-assigned {
+  animation: assignFlash 1.1s ease-in-out 2;
+}
+
+@keyframes assignFlash {
+  0%,
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
+
+  50% {
+    background: #dbeafe;
+    box-shadow: inset 0 0 0 1px #60a5fa;
+  }
 }
 
 .li-avatar {

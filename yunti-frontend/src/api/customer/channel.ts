@@ -9,6 +9,7 @@ export interface ChannelResult {
   desc?: string
   status: number
   stage: number
+  skillGroupId?: string | null
   maskedKey?: string
   appKey?: string
   creatorName?: string

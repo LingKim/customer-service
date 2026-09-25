@@ -175,10 +175,11 @@ public class ChannelOnboardingService {
     private ChannelResult toResult(Channel channel, String creatorName, String maskedKey, String appKey) {
         return new ChannelResult(String.valueOf(channel.getId()), channel.getChannelId(),
                 channel.getChannelType(), channel.getName(), channel.getDesc(), channel.getStatus(),
-                channel.getStage(), maskedKey, appKey, creatorName, channel.getCreateTime());
+                channel.getStage(), channel.getSkillGroupId() == null ? null : String.valueOf(channel.getSkillGroupId()),
+                maskedKey, appKey, creatorName, channel.getCreateTime());
     }
 
     public record ChannelResult(String id, String channelId, int channelType, String name, String desc,
-                                int status, int stage, String maskedKey, String appKey,
+                                int status, int stage, String skillGroupId, String maskedKey, String appKey,
                                 String creatorName, LocalDateTime createTime) {}
 }

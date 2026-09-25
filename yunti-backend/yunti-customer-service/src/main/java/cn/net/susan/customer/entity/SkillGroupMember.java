@@ -11,25 +11,39 @@ import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 
+/**
+ * skill_group_member 技能组坐席绑定实体。
+ */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@TableName("skill_group")
-public class SkillGroup {
+@TableName("skill_group_member")
+public class SkillGroupMember {
+
     @TableId(value = "id", type = IdType.INPUT)
     private Long id;
+
     private String tenantCode;
-    private String name;
-    private String description;
-    private Boolean isDefault;
-    private Boolean isEnabled;
-    /** 排队超过这个秒数就升级：放宽技能组限制（0 表示不升级） */
-    private Integer overflowAfterSeconds;
+
+    private Long skillGroupId;
+
+    private Long userId;
+
+    /** 是否组长 */
+    private Boolean isLeader;
+
+    /** 状态码：1-在组、2-已移出 */
+    private Integer status;
+
     private LocalDateTime createTime;
+
     private LocalDateTime updateTime;
+
     private String creator;
+
     private String editor;
+
     @TableField("is_deleted")
     private Boolean deleted;
 }

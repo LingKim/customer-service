@@ -57,4 +57,17 @@ public interface SessionMapper extends BaseMapper<Session> {
             @Param("tenantCode") String tenantCode,
             @Param("sessionId") Long sessionId
     );
+
+    /**
+     * 排队中的会话（先来先服务），智能路由按这个顺序分配。
+     */
+    List<Session> selectQueuedSessions(
+            @Param("tenantCode") String tenantCode,
+            @Param("limit") int limit
+    );
+
+    /**
+     * 还有排队会话的租户列表（定时任务用）。
+     */
+    List<String> selectTenantsWithQueue();
 }

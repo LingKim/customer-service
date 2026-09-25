@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.customer.mapper.AgentStatusMapper">
+
+    <!-- 路由候选：只取"在线"的坐席，带上当前接待量；
+         指定技能组时要求"在组"；同一个租户内按负载升序、状态停留时间升序排，
+         这样负载最轻、最久没被分配过的人会排在前面 -->
+    <select id="selectCandidates" resultType="java.util.Map">
+        SELECT a.agent_id       AS agent_id,
+               a.status         AS status,
+               a.max_concurrency AS max_concurrency,
+               a.status_time    AS status_time,
+               COALESCE(l.load, 0) AS active_count
+          FROM agent_status a
+          LEFT JOIN LATERAL (
+                SELECT COUNT(1) AS load
+                  FROM session s
+                 WHERE s.tenant_code = a.tenant_code
+                   AND s.agent_id = a.agent_id
+                   AND s.status = 3
+                   AND s.is_deleted = FALSE
+               ) l ON TRUE
+         WHERE a.tenant_code = #{tenantCode}
+           AND a.status = 1
+           AND a.is_connected = TRUE
+           AND a.is_deleted = FALSE
+           <if test="skillGroupId != null">
+           AND EXISTS (
+                SELECT 1 FROM skill_group_member m
+                 WHERE m.tenant_code = a.tenant_code
+                   AND m.skill_group_id = #{skillGroupId}
+                   AND m.user_id = a.agent_id
+                   AND m.status = 1
+                   AND m.is_deleted = FALSE
+               )
+           </if>
+         ORDER BY active_count ASC, a.status_time ASC
+    </select>
+</mapper>

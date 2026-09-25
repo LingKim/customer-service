@@ -144,6 +144,8 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
         } else {
             // 坐席上线：让所有在线坐席看到彼此的状态与接待量
             broadcastAgents(principal.tenantCode());
+            // 通知 customer-service：这个坐席现在能接单了（并触发一次排队调度）
+            markAgentConnection(principal.tenantCode(), principal.id(), true);
         }
     }
 
@@ -210,7 +212,49 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
             }
         } else {
             broadcastAgents(client.principal().tenantCode());
+            // 关掉浏览器 / 断线：不能再给他分派新会话
+            markAgentConnection(client.principal().tenantCode(), client.principal().id(), false);
         }
+    }
+
+    /** 坐席上下线标记：失败只记一行日志，不影响长连接本身 */
+    private void markAgentConnection(String tenantCode, long agentId, boolean connected) {
+        try {
+            sessionApi.markAgentConnection(tenantCode, agentId, connected);
+        } catch (Exception e) {
+            log.warn("同步坐席上下线状态失败 tenant={} agentId={} connected={} error={}",
+                    tenantCode, agentId, connected, e.getMessage());
+        }
+    }
+
+    /**
+     * 通知某个坐席"这条会话分给你了"（智能路由自动接入时由 customer-service 调用）。
+     *
+     * <p>路由分配发生在 customer-service，不经过长连接，所以要反向通知一次，
+     * 否则坐席端只能等下一次列表对账才知道自己被派单了。</p>
+     *
+     * @return 实际送达的连接数（0 表示这个坐席当前没有长连接）
+     */
+    public int notifyAssigned(String tenantCode, long agentId, String sessionNo, String reason) {
+        if (tenantCode == null || tenantCode.isBlank() || sessionNo == null || sessionNo.isBlank()) {
+            return 0;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("sessionNo", sessionNo);
+        payload.put("agentId", agentId);
+        payload.put("reason", reason == null || reason.isBlank() ? "routing" : reason);
+        RealtimeMessage message = RealtimeMessage.withData("ASSIGNED", sessionNo, payload);
+        int delivered = 0;
+        for (ConnectionRegistry.Client client : registry.agentClients(tenantCode)) {
+            if (client.principal().id() != agentId) {
+                continue;
+            }
+            send(client.socket(), message);
+            delivered++;
+        }
+        log.info("通知坐席自动接入 tenant={} agentId={} sessionNo={} 送达连接数={}",
+                tenantCode, agentId, sessionNo, delivered);
+        return delivered;
     }
 
     /**

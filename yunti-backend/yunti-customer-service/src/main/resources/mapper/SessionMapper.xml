@@ -111,4 +111,25 @@
            AND is_deleted = FALSE
          FOR UPDATE
     </select>
+    <!-- 排队会话：没人负责、还没结束，先来先服务（智能路由的扫描对象） -->
+    <select id="selectQueuedSessions" resultType="cn.net.susan.customer.entity.Session">
+        SELECT id, tenant_code, session_no, channel_id, customer_id, status, skill_group_id,
+               agent_id, intent, emotion, source, start_time, end_time, csat_score, last_msg_seq,
+               create_time, update_time, creator, editor, is_deleted
+          FROM session
+         WHERE tenant_code = #{tenantCode}
+           AND agent_id IS NULL
+           AND status IN (1, 2)
+           AND is_deleted = FALSE
+         ORDER BY start_time
+         LIMIT #{limit}
+    </select>
+    <!-- 还有排队会话的租户（定时任务逐个租户调度） -->
+    <select id="selectTenantsWithQueue" resultType="java.lang.String">
+        SELECT DISTINCT tenant_code
+          FROM session
+         WHERE agent_id IS NULL
+           AND status IN (1, 2)
+           AND is_deleted = FALSE
+    </select>
 </mapper>

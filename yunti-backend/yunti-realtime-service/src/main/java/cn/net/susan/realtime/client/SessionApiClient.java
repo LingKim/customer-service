@@ -139,6 +139,21 @@ public class SessionApiClient {
         return claim(tenantCode, sessionNo, agentId);
     }
 
+    /**
+     * 坐席长连接上下线：customer-service 据此更新"这个人现在能不能接单"，
+     * 在线时顺带把积压的排队会话分一次（智能路由）。
+     */
+    public void markAgentConnection(String tenantCode, long agentId, boolean connected) {
+        ApiResponse<Void> response = restClient.post()
+                .uri("/api/customer/internal/agent/connection")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("tenantCode", tenantCode, "agentId", agentId, "connected", connected))
+                .retrieve()
+                .body(new ParameterizedTypeReference<ApiResponse<Void>>() {
+                });
+        unwrap(response);
+    }
+
     public SessionInfo claim(String tenantCode, String sessionNo, long agentId) {
         ApiResponse<SessionInfo> response = restClient.post()
                 .uri("/api/customer/internal/sessions/{sessionNo}/claim", sessionNo)

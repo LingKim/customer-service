@@ -32,6 +32,10 @@
         <el-menu-item v-if="userStore.userType === 2 && canManage" index="/members">
           <span>成员管理</span>
         </el-menu-item>
+        <el-menu-item v-if="userStore.userType === 2 && canManage" index="/skill-groups">
+          <el-icon><Connection /></el-icon>
+          <span>技能组</span>
+        </el-menu-item>
         <el-menu-item v-if="userStore.userType === 2" index="/modules/qa">
           <span>质检中心</span>
         </el-menu-item>

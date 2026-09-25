@@ -72,6 +72,12 @@ const router = createRouter({
           meta: { title: '成员管理', requiresEnterprise: true, requiresManager: true },
         },
         {
+          path: 'skill-groups',
+          name: 'SkillGroups',
+          component: () => import('../views/skill-groups/index.vue'),
+          meta: { title: '技能组', requiresEnterprise: true, requiresManager: true },
+        },
+        {
           path: 'modules/qa',
           name: 'QualityAssurance',
           component: () => import('../views/qa/index.vue'),
