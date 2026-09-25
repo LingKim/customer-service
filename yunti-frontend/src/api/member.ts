@@ -160,7 +160,11 @@ export function createMemberInvite(data: {
       status: 1, statusText: '待接受', expireTime, createTime: new Date().toISOString(),
     }
     saveList(INVITES_KEY, [invite, ...mockInvites()])
-    return Promise.resolve({ ...invite, emailSent: false })
+    return Promise.resolve({
+      id: invite.id, inviteCode: invite.inviteCode, roleCode: data.roleCode,
+      roleName: invite.roleName || '客服专员', expireTime,
+      phone: invite.phone, email: invite.email, emailSent: false,
+    })
   }
   return request<CreateInviteResult>({ url: '/user/members/invites', method: 'post', data })
 }
