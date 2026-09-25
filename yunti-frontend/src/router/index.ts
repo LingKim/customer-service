@@ -77,6 +77,12 @@ const router = createRouter({
           component: () => import('../views/qa/index.vue'),
           meta: { title: '质检中心', requiresEnterprise: true },
         },
+        {
+          path: 'modules/workspace',
+          name: 'Workspace',
+          component: () => import('../views/workspace/index.vue'),
+          meta: { title: '在线客服', requiresEnterprise: true },
+        },
       ],
     },
     {
@@ -84,6 +90,12 @@ const router = createRouter({
       name: 'Guide',
       component: () => import('../views/guide/index.vue'),
       meta: { title: '企业开通引导' },
+    },
+    {
+      path: '/visitor',
+      name: 'Visitor',
+      component: () => import('../views/visitor/index.vue'),
+      meta: { title: '在线客服', public: true },
     },
     {
       path: '/:pathMatch(.*)*',
@@ -95,7 +107,7 @@ const router = createRouter({
 
 // 简单路由守卫：未登录跳登录页
 router.beforeEach(async (to) => {
-  if (!['Login', 'Register', 'InviteAccept'].includes(String(to.name)) && !getToken()) {
+  if (!to.meta.public && !['Login', 'Register', 'InviteAccept'].includes(String(to.name)) && !getToken()) {
     return { name: 'Login', query: { redirect: to.fullPath } }
   }
   if (to.meta.requiresPlatform) {

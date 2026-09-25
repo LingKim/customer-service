@@ -1,0 +1,33 @@
+server:
+  port: 9096
+
+spring:
+  application:
+    name: yunti-realtime-service
+
+yunti:
+  auth:
+    # JWT 签名密钥：必须与 user-service / customer-service 一致，才能认同一批令牌
+    jwt-secret: ${YUNTI_JWT_SECRET:yunti-customer-service-jwt-secret-please-change-in-prod-0123456789}
+  customer:
+    # customer-service 内部接口地址（会话与消息落库）
+    internal-base-url: ${YUNTI_CUSTOMER_INTERNAL_URL:http://127.0.0.1:9093}
+  internal:
+    # 与 customer-service 使用相同的非空密钥
+    shared-secret: ${YUNTI_INTERNAL_SHARED_SECRET:}
+  realtime:
+    # 长连接地址，前端连 ws://host:9096/ws/realtime?token=xxx
+    path: ${YUNTI_WS_PATH:/ws/realtime}
+    # 超过这个时间没收到任何消息（含心跳）就判定掉线并断开
+    idle-timeout-seconds: ${YUNTI_WS_IDLE_TIMEOUT:90}
+    # 单个连接每秒最多发多少条消息（简单限流，防止刷接口）
+    max-messages-per-second: ${YUNTI_WS_MAX_MPS:10}
+    # 单次下行缓冲上限（字节），超出说明客户端消费不过来
+    send-buffer-size-limit: ${YUNTI_WS_SEND_BUFFER:524288}
+    send-time-limit-ms: ${YUNTI_WS_SEND_TIMEOUT:10000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

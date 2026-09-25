@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.customer.mapper.SessionMessageMapper">
+
+    <!-- 按会话取对话记录：只取文本/卡片类消息，按时间正序，供 AI 质检还原真实会话 -->
+    <select id="selectDialog" resultType="cn.net.susan.customer.entity.SessionMessage">
+        SELECT id, tenant_code, session_id, msg_no, msg_type, sender_type, sender_id, content, send_time
+          FROM session_message
+         WHERE tenant_code = #{tenantCode}
+           AND session_id = #{sessionId}
+           AND is_deleted = FALSE
+         ORDER BY send_time, id
+         LIMIT #{limit}
+    </select>
+    <!-- 聊天记录：按时间倒序取一页（beforeId 用于向上翻页），Service 里再反转为正序 -->
+    <select id="selectBySession" resultType="cn.net.susan.customer.entity.SessionMessage">
+        SELECT id, tenant_code, session_id, msg_no, msg_type, sender_type, sender_id, content, send_time
+          FROM session_message
+         WHERE tenant_code = #{tenantCode}
+           AND session_id = #{sessionId}
+           AND is_deleted = FALSE
+           <if test="beforeId != null">
+           AND id &lt; #{beforeId}
+           </if>
+         ORDER BY id DESC
+         LIMIT #{limit}
+    </select>
+</mapper>

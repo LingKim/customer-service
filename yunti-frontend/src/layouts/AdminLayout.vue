@@ -35,6 +35,9 @@
         <el-menu-item v-if="userStore.userType === 2" index="/modules/qa">
           <span>质检中心</span>
         </el-menu-item>
+        <el-menu-item v-if="userStore.userType === 2" index="/modules/workspace">
+          <span>在线客服</span>
+        </el-menu-item>
         <el-menu-item v-if="userStore.userType === 1" index="/admin/reviews">
           <el-icon><Stamp /></el-icon>
           <span>企业审核</span>

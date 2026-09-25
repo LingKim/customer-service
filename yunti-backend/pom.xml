@@ -21,6 +21,7 @@
         <module>yunti-user-service</module>
         <module>yunti-tenant-service</module>
         <module>yunti-customer-service</module>
+        <module>yunti-realtime-service</module>
         <module>yunti-billing-service</module>
         <module>yunti-ops-service</module>
     </modules>

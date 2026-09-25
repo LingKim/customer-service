@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.customer.mapper.SessionMapper">
+
+    <!-- 坐席工作台会话列表：左连客户档案，再用 LATERAL 取每个会话的最后一条消息 -->
+    <select id="selectAgentSessions" resultType="java.util.Map">
+        SELECT s.id            AS session_id,
+               s.session_no    AS session_no,
+               s.tenant_code   AS tenant_code,
+               s.channel_id    AS channel_id,
+               s.customer_id   AS customer_id,
+               s.status        AS status,
+               s.agent_id      AS agent_id,
+               s.intent        AS intent,
+               s.emotion       AS emotion,
+               s.source        AS source,
+               s.start_time    AS start_time,
+               s.end_time      AS end_time,
+               c.name          AS customer_name,
+               c.level         AS customer_level,
+               lm.content      AS last_content,
+               lm.sender_type  AS last_sender_type,
+               lm.send_time    AS last_time,
+               COALESCE(mc.msg_count, 0) AS msg_count
+          FROM session s
+          LEFT JOIN customer c
+                 ON c.id = s.customer_id
+                AND c.tenant_code = s.tenant_code
+                AND c.is_deleted = FALSE
+          LEFT JOIN LATERAL (
+                SELECT m.content, m.sender_type, m.send_time
+                  FROM session_message m
+                 WHERE m.tenant_code = s.tenant_code
+                   AND m.session_id = s.id
+                   AND m.is_deleted = FALSE
+                 ORDER BY m.send_time DESC, m.id DESC
+                 LIMIT 1
+               ) lm ON TRUE
+          LEFT JOIN LATERAL (
+                SELECT COUNT(1) AS msg_count
+                  FROM session_message m2
+                 WHERE m2.tenant_code = s.tenant_code
+                   AND m2.session_id = s.id
+                   AND m2.is_deleted = FALSE
+               ) mc ON TRUE
+         WHERE s.tenant_code = #{tenantCode}
+           AND s.is_deleted = FALSE
+           <if test="status != null">
+           AND s.status = #{status}
+           </if>
+           <if test="keyword != null">
+           AND (
+                s.session_no ILIKE '%' || #{keyword}::text || '%'
+                OR c.name ILIKE '%' || #{keyword}::text || '%'
+               )
+           </if>
+         ORDER BY COALESCE(lm.send_time, s.start_time) DESC
+         LIMIT #{limit}
+    </select>
+    <!-- 同一渠道、同一客户未结束的会话，访客刷新页面时复用，不重复开会话 -->
+    <select id="selectOpenSession" resultType="cn.net.susan.customer.entity.Session">
+        SELECT id, tenant_code, session_no, channel_id, customer_id, status, skill_group_id,
+               agent_id, intent, emotion, source, start_time, end_time, csat_score,
+               create_time, update_time, creator, editor, is_deleted
+          FROM session
+         WHERE tenant_code = #{tenantCode}
+           AND channel_id = #{channelId}
+           AND customer_id = #{customerId}
+           AND status IN (1, 2, 3)
+           AND is_deleted = FALSE
+         ORDER BY start_time DESC
+         LIMIT 1
+    </select>
+</mapper>

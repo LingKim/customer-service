@@ -6,6 +6,8 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '')
   // 默认走本地网关 9090；联调不同后端时可用 VITE_PROXY_TARGET 覆盖
   const apiTarget = env.VITE_PROXY_TARGET || 'http://127.0.0.1:9090'
+  // 实时网关（WebSocket 长连接）单独一个端口，默认 9096
+  const wsTarget = env.VITE_WS_PROXY_TARGET || 'http://127.0.0.1:9096'
   return {
     plugins: [vue()],
     server: {
@@ -26,6 +28,12 @@ export default defineConfig(({ mode }) => {
         },
         '/api/ai': {
           target: apiTarget,
+          changeOrigin: true,
+        },
+        // WebSocket 长连接：开发环境由 Vite 转发到实时网关
+        '/ws': {
+          target: wsTarget,
+          ws: true,
           changeOrigin: true,
         },
       },
