@@ -98,7 +98,15 @@ public class MemberInviteService {
      */
     @Transactional
     public MemberAccessVO memberAccess(LoginUser user) {
-        String tenant = tenantOf(user);
+        if (user == null || user.userType() != UserType.ENTERPRISE.getCode()) {
+            throw new BizException(40301, "仅企业成员可管理客服成员");
+        }
+        String tenant = user.tenantCode();
+        if (tenant == null || tenant.isBlank() || AuthConstants.TENANT_CODE_PLATFORM.equals(tenant)) {
+            // 企业还没开通（租户编码尚未回填）：注册人本身就是企业管理员。
+            // 这里不能抛异常，否则开通引导页 /guide 一进来就弹"请先完成企业开通后再邀请客服成员"。
+            return new MemberAccessVO(true, MemberRole.ADMIN.getCode(), MemberRole.ADMIN.getName());
+        }
         List<SysUserRole> relations = sysUserRoleMapper.selectList(
                 Wrappers.<SysUserRole>lambdaQuery()
                         .eq(SysUserRole::getTenantCode, tenant)
@@ -573,6 +581,21 @@ public class MemberInviteService {
         );
     }
 
+    /**
+     * 同事列表：转接会话时选人用。任何企业成员都能看，只返回必要字段。
+     */
+    public List<ColleagueVO> colleagues(LoginUser user) {
+        String tenant = tenantOf(user);
+        return sysUserMapper.selectList(Wrappers.<SysUser>lambdaQuery()
+                        .eq(SysUser::getTenantCode, tenant)
+                        .eq(SysUser::getUserType, UserType.ENTERPRISE.getCode())
+                        .eq(SysUser::getDeleted, false)
+                        .orderByAsc(SysUser::getId))
+                .stream()
+                .map(item -> new ColleagueVO(String.valueOf(item.getId()), item.getName(), item.getUserNo(), item.getAvatar()))
+                .toList();
+    }
+
     private String statusText(int status) {
         return switch (status) {
             case 1 -> "待接受";
@@ -659,6 +682,12 @@ public class MemberInviteService {
      * 当前成员访问信息。
      */
     public record MemberAccessVO(boolean canManage, String roleCode, String roleName) {
+    }
+
+    /**
+     * 同事（转接选人用）。
+     */
+    public record ColleagueVO(String userId, String name, String userNo, String avatar) {
     }
 
     /**

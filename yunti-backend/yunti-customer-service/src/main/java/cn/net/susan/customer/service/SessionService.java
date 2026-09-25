@@ -7,12 +7,14 @@ import cn.net.susan.customer.entity.Channel;
 import cn.net.susan.customer.entity.ChannelKey;
 import cn.net.susan.customer.entity.Customer;
 import cn.net.susan.customer.entity.Session;
+import cn.net.susan.customer.entity.SessionEvent;
 import cn.net.susan.customer.entity.SessionMessage;
 import cn.net.susan.customer.mapper.ChannelKeyMapper;
 import cn.net.susan.customer.mapper.ChannelMapper;
 import cn.net.susan.customer.mapper.CustomerMapper;
 import cn.net.susan.customer.mapper.SessionMapper;
 import cn.net.susan.customer.mapper.SessionMessageMapper;
+import cn.net.susan.customer.mapper.SessionEventMapper;
 import cn.net.susan.customer.security.VisitorTokenService;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import org.slf4j.Logger;
@@ -43,6 +45,12 @@ public class SessionService {
     private static final DateTimeFormatter NO_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     private static final SecureRandom RANDOM = new SecureRandom();
 
+    /** 匿名客户编号用的字符集：去掉 I / L / O / U 这些容易看错的字母 */
+    private static final char[] CUSTOMER_NO_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ".toCharArray();
+
+    /** 匿名客户编号随机部分长度：26 × 5bit = 130 位，撞不出来也猜不出来 */
+    private static final int CUSTOMER_NO_RANDOM_LENGTH = 26;
+
     /** 会话状态码 */
     public static final int STATUS_QUEUING = 1;
     public static final int STATUS_BOT = 2;
@@ -55,12 +63,26 @@ public class SessionService {
     public static final int SENDER_BOT = 3;
     public static final int SENDER_SYSTEM = 4;
 
+    /** 可见范围码：1-客户与坐席都可见、2-仅坐席可见（内部备注） */
+    public static final int VISIBLE_ALL = 1;
+    public static final int VISIBLE_AGENT_ONLY = 2;
+
+    /** 会话事件类型码：1-转接、2-升级、3-分配、4-关闭、5-超时 */
+    public static final int EVENT_TRANSFER = 1;
+    public static final int EVENT_ASSIGN = 3;
+    public static final int EVENT_CLOSE = 4;
+
+    /** 退回队列时事件里的目标值 */
+    private static final String QUEUE_TARGET = "QUEUE";
+
     private static final int DEFAULT_HISTORY_LIMIT = 30;
     private static final int MAX_HISTORY_LIMIT = 100;
     private static final int SESSION_LIST_LIMIT = 100;
+    private static final int EVENT_LIST_LIMIT = 20;
 
     private final SessionMapper sessionMapper;
     private final SessionMessageMapper sessionMessageMapper;
+    private final SessionEventMapper sessionEventMapper;
     private final CustomerMapper customerMapper;
     private final ChannelMapper channelMapper;
     private final ChannelKeyMapper channelKeyMapper;
@@ -70,6 +92,7 @@ public class SessionService {
     public SessionService(
             SessionMapper sessionMapper,
             SessionMessageMapper sessionMessageMapper,
+            SessionEventMapper sessionEventMapper,
             CustomerMapper customerMapper,
             ChannelMapper channelMapper,
             ChannelKeyMapper channelKeyMapper,
@@ -78,6 +101,7 @@ public class SessionService {
     ) {
         this.sessionMapper = sessionMapper;
         this.sessionMessageMapper = sessionMessageMapper;
+        this.sessionEventMapper = sessionEventMapper;
         this.customerMapper = customerMapper;
         this.channelMapper = channelMapper;
         this.channelKeyMapper = channelKeyMapper;
@@ -111,9 +135,10 @@ public class SessionService {
         if (!Integer.valueOf(1).equals(channel.getStatus())) {
             throw new BizException(40301, "渠道已停用，暂时无法接待");
         }
+        requireOriginAllowed(channel, command.origin());
 
         String tenant = channelKey.getTenantCode();
-        Customer customer = resolveVisitor(tenant, command.visitorKey(), command.visitorName(), channel.getName());
+        Customer customer = resolveVisitor(tenant, command.visitorToken(), command.visitorName(), channel.getName());
 
         Session session = sessionMapper.selectOpenSession(tenant, channel.getId(), customer.getId());
         boolean created = false;
@@ -127,6 +152,8 @@ public class SessionService {
 
         String token = visitorTokenService.createToken(
                 customer.getId(), customer.getName(), tenant, session.getSessionNo());
+        String identityToken = visitorTokenService.createIdentityToken(
+                customer.getId(), customer.getCustomerNo(), customer.getName(), tenant);
         return new OpenResult(
                 session.getSessionNo(),
                 customer.getCustomerNo(),
@@ -134,25 +161,25 @@ public class SessionService {
                 token,
                 visitorTokenService.expireAt(),
                 session.getStatus(),
-                created
+                created,
+                identityToken
         );
     }
 
     /**
      * 坐席工作台：我的会话列表（可按状态与关键词过滤）。
      */
-    public List<SessionVO> agentSessions(LoginUser user, Integer status, String keyword, Long agentId) {
+    public List<SessionVO> agentSessions(LoginUser user, String scope, String keyword) {
         String tenant = tenantOf(user);
         String normalizedKeyword = keyword == null || keyword.isBlank() ? null : keyword.trim();
-        List<Map<String, Object>> rows = sessionMapper.selectAgentSessions(tenant, status, normalizedKeyword, SESSION_LIST_LIMIT);
+        String normalizedScope = scope == null || scope.isBlank() ? "all" : scope.trim().toLowerCase();
+        Long agentId = "mine".equals(normalizedScope) ? user.userId() : null;
+        boolean unassigned = "queue".equals(normalizedScope);
+        List<Map<String, Object>> rows = sessionMapper.selectAgentSessions(
+                tenant, normalizedKeyword, agentId, unassigned, SESSION_LIST_LIMIT);
         List<SessionVO> result = new ArrayList<>(rows.size());
         for (Map<String, Object> row : rows) {
-            SessionVO vo = toSessionVO(row);
-            // agentOnly=true 时只保留"分配给我"的会话，用于工作台的"我的会话"筛选
-            if (agentId != null && !agentId.equals(vo.agentId())) {
-                continue;
-            }
-            result.add(vo);
+            result.add(toSessionVO(row));
         }
         return result;
     }
@@ -163,15 +190,23 @@ public class SessionService {
     public List<MessageVO> history(LoginUser user, String sessionNo, Long beforeId, Integer limit) {
         String tenant = tenantOf(user);
         Session session = requireSession(tenant, sessionNo);
-        return historyOf(tenant, session, beforeId, limit);
+        // 坐席能看到全部消息，包括内部备注
+        return historyOf(tenant, session, beforeId, limit, null);
     }
 
     /**
      * 内部接口：按租户 + 会话号拉历史消息（实时网关在 JOIN 时回给前端）。
      */
-    public List<MessageVO> historyByTenant(String tenantCode, String sessionNo, Long beforeId, Integer limit) {
+    public List<MessageVO> historyByTenant(
+            String tenantCode,
+            String sessionNo,
+            Long beforeId,
+            Integer limit,
+            boolean agentView
+    ) {
         Session session = requireSession(tenantCode, sessionNo);
-        return historyOf(tenantCode, session, beforeId, limit);
+        // 访客视角过滤掉内部备注；坐席视角全都能看
+        return historyOf(tenantCode, session, beforeId, limit, agentView ? null : VISIBLE_ALL);
     }
 
     /**
@@ -235,32 +270,46 @@ public class SessionService {
             int msgType,
             String content
     ) {
+        return appendMessage(tenantCode, sessionNo, senderType, senderId, msgType, content, VISIBLE_ALL);
+    }
+
+    /**
+     * 内部接口：落一条消息（带可见范围，内部备注用 {@code VISIBLE_AGENT_ONLY}）。
+     */
+    @Transactional
+    public MessageVO appendMessage(
+            String tenantCode,
+            String sessionNo,
+            int senderType,
+            Long senderId,
+            int msgType,
+            String content,
+            int visibleTo
+    ) {
         Session session = requireSession(tenantCode, sessionNo);
         if (Integer.valueOf(STATUS_CLOSED).equals(session.getStatus())) {
             throw new BizException(40301, "会话已结束，无法继续发送消息");
         }
-        SessionMessage message = buildMessage(tenantCode, session.getId(), senderType, senderId, msgType, content);
+        SessionMessage message = buildMessage(
+                tenantCode, session.getId(), senderType, senderId, msgType, content, visibleTo);
         sessionMessageMapper.insert(message);
 
         LocalDateTime now = LocalDateTime.now();
         Session update = new Session();
         update.setId(session.getId());
         update.setUpdateTime(now);
-        // 坐席开口即视为接入，会话从"排队中"进入"人工接待"
-        if (senderType == SENDER_AGENT && session.getAgentId() == null) {
-            update.setAgentId(senderId);
-            update.setStatus(STATUS_AGENT);
-        }
         sessionMapper.updateById(update);
         touchCustomer(tenantCode, session.getCustomerId(), now);
         return toMessageVO(message);
     }
 
     /**
-     * 内部接口：坐席接入会话（认领）。
+     * 内部接口：坐席认领会话（待接待 → 我的）。
+     *
+     * <p>并发抢单靠"库里已有负责人就拒绝"兜住：两个坐席同时点接入，只有一个能成功。</p>
      */
     @Transactional
-    public Session assignAgent(String tenantCode, String sessionNo, Long agentId) {
+    public Session claimSession(String tenantCode, String sessionNo, Long agentId) {
         Session session = requireSession(tenantCode, sessionNo);
         if (Integer.valueOf(STATUS_CLOSED).equals(session.getStatus())) {
             throw new BizException(40301, "会话已结束");
@@ -268,24 +317,92 @@ public class SessionService {
         if (session.getAgentId() != null && !session.getAgentId().equals(agentId)) {
             throw new BizException(40301, "该会话已由其他客服接待");
         }
-        Session update = new Session();
-        update.setId(session.getId());
-        update.setAgentId(agentId);
-        update.setStatus(STATUS_AGENT);
-        update.setUpdateTime(LocalDateTime.now());
-        sessionMapper.updateById(update);
+        if (session.getAgentId() != null) {
+            return session;
+        }
+        if (sessionMapper.claimIfUnassigned(tenantCode, session.getId(), agentId) != 1) {
+            Session current = requireSession(tenantCode, sessionNo);
+            if (agentId.equals(current.getAgentId())) {
+                return current;
+            }
+            throw new BizException(40301, "该会话已由其他客服接待");
+        }
         session.setAgentId(agentId);
         session.setStatus(STATUS_AGENT);
-        log.info("坐席接入会话 tenant={} sessionNo={} agentId={}", tenantCode, sessionNo, agentId);
+        recordEvent(tenantCode, session.getId(), EVENT_ASSIGN, agentId, QUEUE_TARGET, String.valueOf(agentId), "坐席接入");
+        appendSystemMessage(tenantCode, session, "人工客服已接入，很高兴为您服务");
+        log.info("坐席认领会话 tenant={} sessionNo={} agentId={}", tenantCode, sessionNo, agentId);
         return session;
     }
 
     /**
-     * 内部接口：结束会话。
+     * 内部接口：退回队列（负责人释放会话，其他人可以再接）。
      */
     @Transactional
-    public Session closeSession(String tenantCode, String sessionNo) {
+    public Session releaseSession(String tenantCode, String sessionNo, Long agentId) {
         Session session = requireSession(tenantCode, sessionNo);
+        if (Integer.valueOf(STATUS_CLOSED).equals(session.getStatus())) {
+            throw new BizException(40301, "会话已结束");
+        }
+        if (session.getAgentId() == null || !session.getAgentId().equals(agentId)) {
+            throw new BizException(40301, "只有当前接待客服可以退回队列");
+        }
+        if (sessionMapper.changeAssignment(tenantCode, session.getId(), agentId, null, STATUS_QUEUING) != 1) {
+            throw new BizException(40301, "会话负责人已变化，请刷新后重试");
+        }
+        session.setAgentId(null);
+        session.setStatus(STATUS_QUEUING);
+        recordEvent(tenantCode, session.getId(), EVENT_TRANSFER, agentId, String.valueOf(agentId), QUEUE_TARGET, "退回队列");
+        appendSystemMessage(tenantCode, session, "会话已退回待接待队列");
+        log.info("会话退回队列 tenant={} sessionNo={} agentId={}", tenantCode, sessionNo, agentId);
+        return session;
+    }
+
+    /**
+     * 内部接口：把会话转接给另一位坐席。
+     */
+    @Transactional
+    public Session transferSession(
+            String tenantCode,
+            String sessionNo,
+            Long fromAgentId,
+            Long toAgentId,
+            String remark
+    ) {
+        if (toAgentId == null) {
+            throw new BizException(40001, "请选择要转接的客服");
+        }
+        if (toAgentId.equals(fromAgentId)) {
+            throw new BizException(40001, "不能转接给自己");
+        }
+        Session session = requireSession(tenantCode, sessionNo);
+        if (Integer.valueOf(STATUS_CLOSED).equals(session.getStatus())) {
+            throw new BizException(40301, "会话已结束");
+        }
+        if (session.getAgentId() == null || !session.getAgentId().equals(fromAgentId)) {
+            throw new BizException(40301, "只有当前接待客服可以转接");
+        }
+        if (sessionMapper.changeAssignment(tenantCode, session.getId(), fromAgentId, toAgentId, STATUS_AGENT) != 1) {
+            throw new BizException(40301, "会话负责人已变化，请刷新后重试");
+        }
+        session.setAgentId(toAgentId);
+        session.setStatus(STATUS_AGENT);
+        recordEvent(tenantCode, session.getId(), EVENT_TRANSFER, fromAgentId,
+                String.valueOf(fromAgentId), String.valueOf(toAgentId), trimRemark(remark));
+        appendSystemMessage(tenantCode, session, "会话已转接给其他客服，请稍候");
+        log.info("会话转接 tenant={} sessionNo={} from={} to={}", tenantCode, sessionNo, fromAgentId, toAgentId);
+        return session;
+    }
+
+    /**
+     * 内部接口：结束会话（可带结束小结）。
+     */
+    @Transactional
+    public Session closeSession(String tenantCode, String sessionNo, Long operatorId, String remark) {
+        Session session = requireSession(tenantCode, sessionNo);
+        if (Integer.valueOf(STATUS_CLOSED).equals(session.getStatus())) {
+            return session;
+        }
         LocalDateTime now = LocalDateTime.now();
         Session update = new Session();
         update.setId(session.getId());
@@ -295,13 +412,42 @@ public class SessionService {
         sessionMapper.updateById(update);
         session.setStatus(STATUS_CLOSED);
         session.setEndTime(now);
-        log.info("会话已结束 tenant={} sessionNo={}", tenantCode, sessionNo);
+        recordEvent(tenantCode, session.getId(), EVENT_CLOSE, operatorId, null, null, trimRemark(remark));
+        appendSystemMessage(tenantCode, session, "本次会话已结束，感谢您的咨询");
+        log.info("会话已结束 tenant={} sessionNo={} operator={}", tenantCode, sessionNo, operatorId);
         return session;
     }
 
-    private List<MessageVO> historyOf(String tenant, Session session, Long beforeId, Integer limit) {
+    /**
+     * 会话流转记录（转接 / 分配 / 关闭），工作台用来展示"这单经历了什么"。
+     */
+    public List<EventVO> events(LoginUser user, String sessionNo) {
+        String tenant = tenantOf(user);
+        Session session = requireSession(tenant, sessionNo);
+        return sessionEventMapper.selectBySession(tenant, session.getId(), EVENT_LIST_LIMIT).stream()
+                .map(row -> new EventVO(
+                        intValue(row.get("event_type")),
+                        longValue(row.get("operator_id")),
+                        stringValue(row.get("from_value")),
+                        stringValue(row.get("to_value")),
+                        stringValue(row.get("remark")),
+                        dateValue(row.get("event_time"))))
+                .toList();
+    }
+
+    /**
+     * 内部接口：各坐席当前接待量（工作台展示"谁忙谁闲"，配合在线连接判断负载）。
+     */
+    public List<AgentLoadVO> agentWorkload(String tenantCode) {
+        return sessionEventMapper.selectAgentWorkload(tenantCode).stream()
+                .map(row -> new AgentLoadVO(longValue(row.get("agent_id")), intValue(row.get("session_count"))))
+                .toList();
+    }
+
+    private List<MessageVO> historyOf(String tenant, Session session, Long beforeId, Integer limit, Integer visibleTo) {
         int size = limit == null || limit <= 0 ? DEFAULT_HISTORY_LIMIT : Math.min(limit, MAX_HISTORY_LIMIT);
-        List<SessionMessage> rows = sessionMessageMapper.selectBySession(tenant, session.getId(), beforeId, size);
+        List<SessionMessage> rows = sessionMessageMapper.selectBySession(
+                tenant, session.getId(), beforeId, visibleTo, size);
         // SQL 是倒序取的，展示要正序
         Collections.reverse(rows);
         return rows.stream().map(this::toMessageVO).toList();
@@ -335,7 +481,7 @@ public class SessionService {
     }
 
     private void appendSystemMessage(String tenant, Session session, String content) {
-        sessionMessageMapper.insert(buildMessage(tenant, session.getId(), SENDER_SYSTEM, null, 5, content));
+        sessionMessageMapper.insert(buildMessage(tenant, session.getId(), SENDER_SYSTEM, null, 5, content, VISIBLE_ALL));
     }
 
     private SessionMessage buildMessage(
@@ -344,7 +490,8 @@ public class SessionService {
             int senderType,
             Long senderId,
             int msgType,
-            String content
+            String content,
+            int visibleTo
     ) {
         LocalDateTime now = LocalDateTime.now();
         return SessionMessage.builder()
@@ -357,11 +504,47 @@ public class SessionService {
                 .senderId(senderId)
                 .content(content == null ? "" : content)
                 .status(1)
+                .visibleTo(visibleTo)
                 .sendTime(now)
                 .createTime(now)
                 .updateTime(now)
                 .deleted(false)
                 .build();
+    }
+
+    /**
+     * 记一条会话流转事件（转接 / 分配 / 关闭）。
+     */
+    private void recordEvent(
+            String tenant,
+            Long sessionId,
+            int eventType,
+            Long operatorId,
+            String fromValue,
+            String toValue,
+            String remark
+    ) {
+        LocalDateTime now = LocalDateTime.now();
+        sessionEventMapper.insert(SessionEvent.builder()
+                .id(idGenerator.nextId())
+                .tenantCode(tenant)
+                .sessionId(sessionId)
+                .eventType(eventType)
+                .operatorId(operatorId)
+                .fromValue(fromValue)
+                .toValue(toValue)
+                .remark(remark)
+                .eventTime(now)
+                .createTime(now)
+                .build());
+    }
+
+    private String trimRemark(String remark) {
+        if (remark == null || remark.isBlank()) {
+            return null;
+        }
+        String value = remark.trim();
+        return value.length() > 255 ? value.substring(0, 255) : value;
     }
 
     private void touchCustomer(String tenant, Long customerId, LocalDateTime time) {
@@ -376,24 +559,29 @@ public class SessionService {
     }
 
     /**
-     * 访客建档：visitorKey 由访客端本地保存，用来复用同一个客户档案。
+     * 访客建档：只认服务端签发的<b>访客身份令牌</b>，认不出来就当新访客。
+     *
+     * <p>为什么不再直接用前端回传的客户编号？编号是明文、可枚举的，
+     * 别人拿到编号就能顶替这个客户继续会话。改成"签名令牌 + 随机编号"后，
+     * 前端只有一个不透明字符串，伪造不了、也猜不到。</p>
      */
-    private Customer resolveVisitor(String tenant, String visitorKey, String visitorName, String channelName) {
-        String customerNo = visitorKey == null || visitorKey.isBlank() ? generateCustomerNo() : visitorKey.trim();
-        Customer existing = customerMapper.selectOne(Wrappers.<Customer>lambdaQuery()
-                .eq(Customer::getTenantCode, tenant)
-                .eq(Customer::getCustomerNo, customerNo)
-                .eq(Customer::getDeleted, false)
-                .last("LIMIT 1"));
-        if (existing != null) {
-            return existing;
+    private Customer resolveVisitor(String tenant, String identityToken, String visitorName, String channelName) {
+        VisitorTokenService.VisitorIdentity identity = visitorTokenService.parseIdentityToken(identityToken);
+        if (identity != null && tenant.equals(identity.tenantCode())) {
+            Customer existing = customerMapper.selectById(identity.customerId());
+            if (existing != null
+                    && !Boolean.TRUE.equals(existing.getDeleted())
+                    && tenant.equals(existing.getTenantCode())) {
+                return touchVisitor(existing, visitorName);
+            }
         }
+        String customerNo = generateCustomerNo();
         LocalDateTime now = LocalDateTime.now();
         Customer customer = Customer.builder()
                 .id(idGenerator.nextId())
                 .tenantCode(tenant)
                 .customerNo(customerNo)
-                .name(visitorName == null || visitorName.isBlank() ? "访客" + customerNo.substring(Math.max(0, customerNo.length() - 4)) : visitorName.trim())
+                .name(visitorName == null || visitorName.isBlank() ? "访客" + customerNo.substring(customerNo.length() - 4) : visitorName.trim())
                 .level(1)
                 .channel(channelName)
                 .ordersCount(0)
@@ -407,6 +595,93 @@ public class SessionService {
                 .build();
         customerMapper.insert(customer);
         return customer;
+    }
+
+    /**
+     * 老访客回来：刷新最后活跃时间；如果这次报了新名字，顺手更新档案。
+     */
+    private Customer touchVisitor(Customer customer, String visitorName) {
+        Customer update = new Customer();
+        update.setId(customer.getId());
+        update.setLastActive(LocalDateTime.now());
+        update.setUpdateTime(LocalDateTime.now());
+        boolean renamed = false;
+        if (visitorName != null && !visitorName.isBlank() && !visitorName.trim().equals(customer.getName())) {
+            update.setName(visitorName.trim());
+            renamed = true;
+        }
+        customerMapper.updateById(update);
+        if (renamed) {
+            customer.setName(update.getName());
+        }
+        customer.setLastActive(update.getLastActive());
+        return customer;
+    }
+
+    /**
+     * 渠道域名白名单：没配置就不限制（兼容老渠道）；配置了就只放行名单里的来源。
+     *
+     * <p>规则写法：{@code shop.example.com} 精确匹配；{@code *.example.com} 匹配子域名；
+     * {@code localhost:5173} 只放行这个端口；{@code *} 放行全部。多个规则用逗号分隔。</p>
+     */
+    private void requireOriginAllowed(Channel channel, String origin) {
+        String allowed = channel.getAllowedOrigins();
+        if (allowed == null || allowed.isBlank()) {
+            return;
+        }
+        String host = hostOf(origin);
+        if (host == null) {
+            throw new BizException(40301, "该渠道已开启域名白名单，缺少来源信息，无法接入");
+        }
+        String hostWithPort = hostWithPortOf(origin);
+        for (String rule : allowed.split(",")) {
+            String candidate = rule.trim().toLowerCase();
+            if (candidate.isEmpty()) {
+                continue;
+            }
+            if ("*".equals(candidate) || candidate.equals(host)) {
+                return;
+            }
+            if (candidate.startsWith("*.") && host.endsWith(candidate.substring(1))) {
+                return;
+            }
+            if (candidate.contains(":") && candidate.equals(hostWithPort)) {
+                return;
+            }
+        }
+        log.warn("渠道域名未在白名单内 channel={} origin={} allowed={}", channel.getName(), host, allowed);
+        throw new BizException(40301, "当前域名未在渠道白名单内，请联系企业管理员");
+    }
+
+    /** 从 Origin / Referer 里取出 host（全小写，不带端口、路径、协议）。 */
+    private String hostOf(String origin) {
+        String hostWithPort = hostWithPortOf(origin);
+        if (hostWithPort == null) {
+            return null;
+        }
+        int colon = hostWithPort.indexOf(':');
+        return colon >= 0 ? hostWithPort.substring(0, colon) : hostWithPort;
+    }
+
+    /** 从 Origin / Referer 里取出 host[:port]（全小写，不带协议与路径）。 */
+    private String hostWithPortOf(String origin) {
+        if (origin == null || origin.isBlank()) {
+            return null;
+        }
+        String value = origin.trim().toLowerCase();
+        int schemeIndex = value.indexOf("://");
+        if (schemeIndex >= 0) {
+            value = value.substring(schemeIndex + 3);
+        }
+        int pathIndex = value.indexOf('/');
+        if (pathIndex >= 0) {
+            value = value.substring(0, pathIndex);
+        }
+        int at = value.indexOf('@');
+        if (at >= 0) {
+            value = value.substring(at + 1);
+        }
+        return value.isBlank() ? null : value;
     }
 
     private String tenantOf(LoginUser user) {
@@ -429,7 +704,12 @@ public class SessionService {
     }
 
     private String generateCustomerNo() {
-        return "V" + LocalDateTime.now().format(NO_TIME) + String.format("%03d", RANDOM.nextInt(1000));
+        StringBuilder sb = new StringBuilder(CUSTOMER_NO_RANDOM_LENGTH + 1);
+        sb.append('V');
+        for (int i = 0; i < CUSTOMER_NO_RANDOM_LENGTH; i++) {
+            sb.append(CUSTOMER_NO_ALPHABET[RANDOM.nextInt(CUSTOMER_NO_ALPHABET.length)]);
+        }
+        return sb.toString();
     }
 
     private SessionVO toSessionVO(Map<String, Object> row) {
@@ -462,6 +742,7 @@ public class SessionService {
                 message.getSenderId(),
                 message.getMsgType(),
                 message.getContent(),
+                message.getVisibleTo() == null ? VISIBLE_ALL : message.getVisibleTo(),
                 message.getSendTime()
         );
     }
@@ -504,7 +785,7 @@ public class SessionService {
     }
 
     /** 访客开会话入参 */
-    public record OpenCommand(String appKey, String visitorKey, String visitorName) {
+    public record OpenCommand(String appKey, String visitorToken, String visitorName, String origin) {
     }
 
     /** 访客开会话结果 */
@@ -515,7 +796,9 @@ public class SessionService {
             String visitorToken,
             LocalDateTime tokenExpireAt,
             int sessionStatus,
-            boolean created
+            boolean created,
+            /** 访客身份令牌（长期）：前端保存，下次打开时回传以复用客户档案 */
+            String visitorIdentityToken
     ) {
     }
 
@@ -549,7 +832,23 @@ public class SessionService {
             Long senderId,
             Integer msgType,
             String content,
+            Integer visibleTo,
             LocalDateTime sendTime
     ) {
+    }
+
+    /** 会话流转记录 */
+    public record EventVO(
+            Integer eventType,
+            Long operatorId,
+            String fromValue,
+            String toValue,
+            String remark,
+            LocalDateTime eventTime
+    ) {
+    }
+
+    /** 坐席接待量 */
+    public record AgentLoadVO(Long agentId, Integer sessionCount) {
     }
 }

@@ -5,6 +5,8 @@
  * - 连接：ws://host:9096/ws/realtime?token=xxx（坐席用登录令牌，访客用访客令牌）
  * - 心跳：客户端 30 秒发一次 PING，服务端回 PONG，超时判定掉线
  * - 可靠：每条消息带 clientMsgNo，服务端落库后回 ACK；没等到 ACK 的消息重连后自动重发
+ * - 下行：CONNECTED / JOINED / ACK / MESSAGE / HISTORY / SESSION / PRESENCE / AGENTS / QUEUE / ERROR
+ * （QUEUE 是"会话列表有变化"的提醒，坐席工作台收到后重新拉一次列表）
  */
 
 export type RealtimeState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed'
@@ -16,6 +18,10 @@ export interface RealtimeMessage {
   msgType?: number
   content?: string
   beforeId?: number
+  /** 转接目标坐席 */
+  toAgentId?: string
+  /** 转接原因 / 结束小结 */
+  remark?: string
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data?: any
   serverTime?: number

@@ -45,8 +45,13 @@
                ) mc ON TRUE
          WHERE s.tenant_code = #{tenantCode}
            AND s.is_deleted = FALSE
-           <if test="status != null">
-           AND s.status = #{status}
+           <if test="agentId != null">
+           AND s.agent_id = #{agentId}
+           AND s.status = 3
+           </if>
+           <if test="unassigned">
+           AND s.agent_id IS NULL
+           AND s.status IN (1, 2)
            </if>
            <if test="keyword != null">
            AND (
@@ -71,4 +76,22 @@
          ORDER BY start_time DESC
          LIMIT 1
     </select>
+    <update id="claimIfUnassigned">
+        UPDATE session
+           SET agent_id = #{agentId}, status = 3, update_time = CURRENT_TIMESTAMP
+         WHERE id = #{sessionId}
+           AND tenant_code = #{tenantCode}
+           AND agent_id IS NULL
+           AND status IN (1, 2)
+           AND is_deleted = FALSE
+    </update>
+    <update id="changeAssignment">
+        UPDATE session
+           SET agent_id = #{newAgentId}, status = #{newStatus}, update_time = CURRENT_TIMESTAMP
+         WHERE id = #{sessionId}
+           AND tenant_code = #{tenantCode}
+           AND agent_id = #{expectedAgentId}
+           AND status = 3
+           AND is_deleted = FALSE
+    </update>
 </mapper>

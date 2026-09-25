@@ -19,6 +19,9 @@ public class RealtimeTokenParser {
     /** 访客令牌标记（载荷 typ） */
     private static final int TOKEN_TYPE_VISITOR = 4;
 
+    /** 访客身份令牌标记：长期身份令牌不能拿来建会话连接 */
+    private static final int TOKEN_TYPE_VISITOR_IDENTITY = 3;
+
     /** 用户类型：企业账号 */
     private static final int USER_TYPE_ENTERPRISE = 2;
 
@@ -49,6 +52,10 @@ public class RealtimeTokenParser {
         Integer typ = claims.get("typ", Integer.class);
         String tenant = claims.get("tnt", String.class);
         String name = claims.get("name", String.class);
+
+        if (typ != null && typ == TOKEN_TYPE_VISITOR_IDENTITY) {
+            throw new BizException(40100, "访客身份令牌不能用于建立会话连接，请先打开会话");
+        }
 
         if (typ != null && typ == TOKEN_TYPE_VISITOR) {
             String sessionNo = claims.get("sno", String.class);

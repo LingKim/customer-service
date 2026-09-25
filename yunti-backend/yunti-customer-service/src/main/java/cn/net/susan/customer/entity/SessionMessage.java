@@ -45,6 +45,9 @@ public class SessionMessage {
     /** 消息状态码：1-已发送、2-已送达、3-已读、4-失败 */
     private Integer status;
 
+    /** 可见范围码：1-客户与坐席都可见、2-仅坐席可见（内部备注） */
+    private Integer visibleTo;
+
     private LocalDateTime sendTime;
 
     private LocalDateTime createTime;

@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS channel (
   channel_type SMALLINT NOT NULL,
   name VARCHAR(64) NOT NULL,
   "desc" VARCHAR(255),
+  allowed_origins VARCHAR(512),
   skill_group_id BIGINT,
   status SMALLINT NOT NULL DEFAULT 1,
   stage SMALLINT NOT NULL DEFAULT 3,
@@ -190,6 +191,7 @@ CREATE TABLE IF NOT EXISTS "session_message" (
   "session_id" BIGINT NOT NULL,
   "msg_no" VARCHAR(40) NOT NULL,
   "msg_type" SMALLINT NOT NULL,
+  "visible_to" SMALLINT NOT NULL DEFAULT 1,
   "sender_type" SMALLINT NOT NULL,
   "sender_id" BIGINT DEFAULT NULL,
   "content" TEXT,
@@ -202,6 +204,7 @@ CREATE TABLE IF NOT EXISTS "session_message" (
   "editor" VARCHAR(64) DEFAULT NULL,
   "is_deleted" BOOLEAN NOT NULL DEFAULT FALSE,
   CONSTRAINT ck_session_message_msg_type CHECK ("msg_type" IN (1,2,3,4,5)),
+  CONSTRAINT ck_session_message_visible_to CHECK ("visible_to" IN (1,2)),
   CONSTRAINT ck_session_message_sender_type CHECK ("sender_type" IN (1,2,3,4)),
   CONSTRAINT ck_session_message_status CHECK ("status" IN (1,2,3,4)),
   PRIMARY KEY ("id"),
@@ -211,6 +214,7 @@ COMMENT ON TABLE "session_message" IS '会话消息表';
 COMMENT ON COLUMN "session_message"."id" IS '主键ID（雪花算法生成）';
 COMMENT ON COLUMN "session_message"."session_id" IS '会话ID';
 COMMENT ON COLUMN "session_message"."msg_no" IS '消息编号（客户端幂等键）';
+COMMENT ON COLUMN "session_message"."visible_to" IS '可见范围码：1-客户与坐席都可见、2-仅坐席可见（内部备注）';
 COMMENT ON COLUMN "session_message"."msg_type" IS '类型码：1-文本、2-图片、3-卡片、4-事件、5-系统';
 COMMENT ON COLUMN "session_message"."sender_type" IS '发送方码：1-客户、2-坐席、3-机器人、4-系统';
 COMMENT ON COLUMN "session_message"."sender_id" IS '发送人ID';
@@ -258,3 +262,29 @@ COMMENT ON COLUMN "customer"."csat" IS '满意度均值';
 COMMENT ON COLUMN "customer"."sentiment" IS '情绪标签码：1-正面、2-负面、3-中性';
 COMMENT ON COLUMN "customer"."last_active" IS '最近活跃时间';
 CREATE INDEX IF NOT EXISTS "idx_customer_tenant_level" ON "customer" ("tenant_code", "level");
+
+-- 第 16 章：会话流转记录。
+CREATE TABLE IF NOT EXISTS "session_event" (
+  "id" BIGINT NOT NULL,
+  "tenant_code" VARCHAR(16) NOT NULL,
+  "session_id" BIGINT NOT NULL,
+  "event_type" SMALLINT NOT NULL,
+  "operator_id" BIGINT DEFAULT NULL,
+  "from_value" VARCHAR(64) DEFAULT NULL,
+  "to_value" VARCHAR(64) DEFAULT NULL,
+  "remark" VARCHAR(255) DEFAULT NULL,
+  "event_time" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "create_time" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT ck_session_event_event_type CHECK ("event_type" IN (1,2,3,4,5)),
+  PRIMARY KEY ("id")
+);
+COMMENT ON TABLE "session_event" IS '会话事件表';
+COMMENT ON COLUMN "session_event"."id" IS '主键ID（雪花算法生成）';
+COMMENT ON COLUMN "session_event"."session_id" IS '会话ID';
+COMMENT ON COLUMN "session_event"."event_type" IS '事件类型码：1-转接、2-升级、3-分配、4-关闭、5-超时';
+COMMENT ON COLUMN "session_event"."operator_id" IS '操作人ID';
+COMMENT ON COLUMN "session_event"."from_value" IS '来源值（原坐席/原技能组）';
+COMMENT ON COLUMN "session_event"."to_value" IS '目标值';
+COMMENT ON COLUMN "session_event"."remark" IS '备注';
+COMMENT ON COLUMN "session_event"."event_time" IS '事件时间';
+CREATE INDEX IF NOT EXISTS "idx_session_event_tenant_session" ON "session_event" ("tenant_code", "session_id", "event_time");

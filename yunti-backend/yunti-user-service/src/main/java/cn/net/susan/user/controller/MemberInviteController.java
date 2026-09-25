@@ -57,6 +57,16 @@ public class MemberInviteController {
     }
 
     /**
+     * 同事列表（转接会话选人用，任何企业成员都能看）。
+     */
+    @GetMapping("/colleagues")
+    public ApiResponse<List<MemberInviteService.ColleagueVO>> colleagues(
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        return ApiResponse.ok(memberService.colleagues(requireEnterpriseLogin(authorization)));
+    }
+
+    /**
      * 当前企业成员访问信息（是否可管理成员 + 当前角色）。
      */
     @GetMapping("/access")

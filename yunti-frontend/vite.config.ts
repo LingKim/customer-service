@@ -30,6 +30,11 @@ export default defineConfig(({ mode }) => {
           target: apiTarget,
           changeOrigin: true,
         },
+        // 实时网关的 HTTP 接口（在线状态对账）
+        '/api/realtime': {
+          target: apiTarget,
+          changeOrigin: true,
+        },
         // WebSocket 长连接：开发环境由 Vite 转发到实时网关
         '/ws': {
           target: wsTarget,

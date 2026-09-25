@@ -29,6 +29,7 @@ public interface SessionMessageMapper extends BaseMapper<SessionMessage> {
             @Param("tenantCode") String tenantCode,
             @Param("sessionId") Long sessionId,
             @Param("beforeId") Long beforeId,
+            @Param("visibleTo") Integer visibleTo,
             @Param("limit") int limit
     );
 }

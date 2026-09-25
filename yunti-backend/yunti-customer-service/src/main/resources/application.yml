@@ -19,6 +19,9 @@ yunti:
     worker-id: ${YUNTI_WORKER_ID:3}
   auth:
     jwt-secret: ${YUNTI_JWT_SECRET:yunti-customer-service-jwt-secret-please-change-in-prod-0123456789}
+    visitor-identity-expire-seconds: ${YUNTI_VISITOR_IDENTITY_EXPIRE_SECONDS:2592000}
+  visitor:
+    open-rate-limit-per-minute: ${YUNTI_VISITOR_OPEN_RATE_LIMIT_PER_MINUTE:30}
   user:
     internal-base-url: ${YUNTI_USER_INTERNAL_URL:http://127.0.0.1:9091}
   ai:

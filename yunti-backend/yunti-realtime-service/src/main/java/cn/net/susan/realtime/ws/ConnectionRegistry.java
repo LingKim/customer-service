@@ -5,6 +5,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -110,5 +113,64 @@ public class ConnectionRegistry {
 
     public int totalConnections() {
         return clients.size();
+    }
+
+    /**
+     * 某个租户当前在线的坐席连接（一个坐席可能开了多个标签页）。
+     */
+    public List<Client> agentClients(String tenantCode) {
+        List<Client> result = new ArrayList<>();
+        for (Client client : clients.values()) {
+            RealtimePrincipal principal = client.principal();
+            if (principal.identity() == RealtimePrincipal.Identity.AGENT
+                    && principal.tenantCode().equals(tenantCode)) {
+                result.add(client);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 在线坐席 ID 集合。
+     */
+    public Set<Long> onlineAgentIds(String tenantCode) {
+        Set<Long> ids = new LinkedHashSet<>();
+        for (Client client : agentClients(tenantCode)) {
+            ids.add(client.principal().id());
+        }
+        return ids;
+    }
+
+    /**
+     * 该租户当前在线的访客会话号。
+     *
+     * <p>坐席上线时拿它做一次快照，工作台左侧列表的"客户在线/已离线"状态点
+     * 从第一帧就是准的，不用等下一次上下线事件。</p>
+     */
+    public Set<String> onlineVisitorSessions(String tenantCode) {
+        Set<String> sessions = new LinkedHashSet<>();
+        for (Client client : clients.values()) {
+            RealtimePrincipal principal = client.principal();
+            if (principal.isVisitor()
+                    && principal.tenantCode().equals(tenantCode)
+                    && principal.sessionNo() != null) {
+                sessions.add(principal.sessionNo());
+            }
+        }
+        return sessions;
+    }
+
+    /**
+     * 正在某个会话里的坐席（一个会话可以被多个坐席同时看着：主接 + 协助）。
+     */
+    public Set<Long> agentIdsInSession(String sessionNo) {
+        Set<Long> ids = new LinkedHashSet<>();
+        for (String socketId : subscribersOf(sessionNo)) {
+            Client client = clients.get(socketId);
+            if (client != null && client.principal().identity() == RealtimePrincipal.Identity.AGENT) {
+                ids.add(client.principal().id());
+            }
+        }
+        return ids;
     }
 }

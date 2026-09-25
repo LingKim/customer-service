@@ -19,8 +19,9 @@ public interface SessionMapper extends BaseMapper<Session> {
      */
     List<Map<String, Object>> selectAgentSessions(
             @Param("tenantCode") String tenantCode,
-            @Param("status") Integer status,
             @Param("keyword") String keyword,
+            @Param("agentId") Long agentId,
+            @Param("unassigned") boolean unassigned,
             @Param("limit") int limit
     );
 
@@ -31,5 +32,19 @@ public interface SessionMapper extends BaseMapper<Session> {
             @Param("tenantCode") String tenantCode,
             @Param("channelId") Long channelId,
             @Param("customerId") Long customerId
+    );
+
+    int claimIfUnassigned(
+            @Param("tenantCode") String tenantCode,
+            @Param("sessionId") Long sessionId,
+            @Param("agentId") Long agentId
+    );
+
+    int changeAssignment(
+            @Param("tenantCode") String tenantCode,
+            @Param("sessionId") Long sessionId,
+            @Param("expectedAgentId") Long expectedAgentId,
+            @Param("newAgentId") Long newAgentId,
+            @Param("newStatus") int newStatus
     );
 }

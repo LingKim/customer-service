@@ -12,15 +12,19 @@
          ORDER BY send_time, id
          LIMIT #{limit}
     </select>
-    <!-- 聊天记录：按时间倒序取一页（beforeId 用于向上翻页），Service 里再反转为正序 -->
+    <!-- 聊天记录：按时间倒序取一页（beforeId 向上翻页）；visibleTo=1 时过滤掉坐席内部备注 -->
     <select id="selectBySession" resultType="cn.net.susan.customer.entity.SessionMessage">
-        SELECT id, tenant_code, session_id, msg_no, msg_type, sender_type, sender_id, content, send_time
+        SELECT id, tenant_code, session_id, msg_no, msg_type, sender_type, sender_id, content,
+               status, visible_to, send_time
           FROM session_message
          WHERE tenant_code = #{tenantCode}
            AND session_id = #{sessionId}
            AND is_deleted = FALSE
            <if test="beforeId != null">
            AND id &lt; #{beforeId}
+           </if>
+           <if test="visibleTo != null">
+           AND visible_to = #{visibleTo}
            </if>
          ORDER BY id DESC
          LIMIT #{limit}

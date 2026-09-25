@@ -112,7 +112,24 @@ export function fetchMemberAccess(): Promise<MemberAccess> {
       ? { canManage: false, roleCode: member.roleCode, roleName: member.roleName }
       : { canManage: true, roleCode: 'ADMIN', roleName: '企业管理员' })
   }
-  return request<MemberAccess>({ url: '/user/members/access', method: 'get' })
+  return request<MemberAccess>({ url: '/user/members/access', method: 'get', silent: true })
+}
+
+/** 同事列表供会话转接使用。 */
+export interface ColleagueOption {
+  userId: string
+  name: string
+  userNo: string
+  avatar?: string
+}
+
+export function listColleagues(): Promise<ColleagueOption[]> {
+  if (USE_MOCK) {
+    return Promise.resolve(readList<MemberItem>(MEMBERS_KEY).map(({ userId, name, userNo, avatar }) => ({
+      userId, name, userNo, avatar,
+    })))
+  }
+  return request<ColleagueOption[]>({ url: '/user/members/colleagues', method: 'get' })
 }
 
 /** 可邀请角色 */

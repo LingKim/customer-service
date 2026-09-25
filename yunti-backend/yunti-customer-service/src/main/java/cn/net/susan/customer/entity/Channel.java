@@ -29,6 +29,8 @@ public class Channel {
     private Integer status;
     private Integer stage;
     private Boolean isEnabled;
+    /** 允许访客接入的来源域名，逗号分隔。 */
+    private String allowedOrigins;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
     private String creator;

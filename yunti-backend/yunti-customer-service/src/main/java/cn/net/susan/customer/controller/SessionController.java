@@ -3,7 +3,9 @@ package cn.net.susan.customer.controller;
 import cn.net.susan.common.api.ApiResponse;
 import cn.net.susan.common.auth.LoginUser;
 import cn.net.susan.customer.security.JwtTokenParser;
+import cn.net.susan.customer.security.OpenSessionRateLimiter;
 import cn.net.susan.customer.service.SessionService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -27,33 +29,69 @@ public class SessionController {
 
     private final SessionService sessionService;
     private final JwtTokenParser jwtTokenParser;
+    private final OpenSessionRateLimiter openSessionRateLimiter;
 
-    public SessionController(SessionService sessionService, JwtTokenParser jwtTokenParser) {
+    public SessionController(
+            SessionService sessionService,
+            JwtTokenParser jwtTokenParser,
+            OpenSessionRateLimiter openSessionRateLimiter
+    ) {
         this.sessionService = sessionService;
         this.jwtTokenParser = jwtTokenParser;
+        this.openSessionRateLimiter = openSessionRateLimiter;
     }
 
     /**
-     * 访客打开会话：前端用渠道密钥调用，无需登录，返回访客令牌。
+     * 访客打开会话：前端用渠道密钥调用，无需登录，返回会话令牌 + 访客身份令牌。
+     *
+     * <p>来源域名（Origin / Referer）用于渠道白名单校验；客户端 IP 用于开会话限流。</p>
      */
     @PostMapping("/open")
-    public ApiResponse<SessionService.OpenResult> open(@Valid @RequestBody OpenBody body) {
-        return ApiResponse.ok(sessionService.openSession(
-                new SessionService.OpenCommand(body.appKey(), body.visitorKey(), body.visitorName())));
+    public ApiResponse<SessionService.OpenResult> open(
+            @Valid @RequestBody OpenBody body,
+            HttpServletRequest request
+    ) {
+        openSessionRateLimiter.check(body.appKey(), clientIp(request));
+        return ApiResponse.ok(sessionService.openSession(new SessionService.OpenCommand(
+                body.appKey(),
+                body.visitorToken(),
+                body.visitorName(),
+                requestOrigin(request))));
+    }
+
+    /** 来源：优先 Origin，取不到再退回 Referer（老浏览器/同源请求可能没有 Origin）。 */
+    private String requestOrigin(HttpServletRequest request) {
+        String origin = request.getHeader("Origin");
+        if (origin != null && !origin.isBlank()) {
+            return origin;
+        }
+        return request.getHeader("Referer");
+    }
+
+    /** 客户端 IP：网关转发时优先取 X-Forwarded-For 的第一段。 */
+    private String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        String realIp = request.getHeader("X-Real-IP");
+        if (realIp != null && !realIp.isBlank()) {
+            return realIp.trim();
+        }
+        return request.getRemoteAddr();
     }
 
     /**
-     * 坐席工作台：会话列表。
+     * 坐席工作台：会话列表。scope 取值：all-全部、queue-待接待、mine-我的会话。
      */
     @GetMapping
     public ApiResponse<List<SessionService.SessionVO>> list(
             @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestParam(required = false) Integer status,
             @RequestParam(required = false) String keyword,
-            @RequestParam(required = false, defaultValue = "false") boolean mine
+            @RequestParam(required = false, defaultValue = "all") String scope
     ) {
         LoginUser user = jwtTokenParser.requireLoginUser(authorization);
-        return ApiResponse.ok(sessionService.agentSessions(user, status, keyword, mine ? user.userId() : null));
+        return ApiResponse.ok(sessionService.agentSessions(user, scope, keyword));
     }
 
     /**
@@ -83,6 +121,18 @@ public class SessionController {
     }
 
     /**
+     * 会话流转记录（转接 / 分配 / 关闭）。
+     */
+    @GetMapping("/{sessionNo}/events")
+    public ApiResponse<List<SessionService.EventVO>> events(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String sessionNo
+    ) {
+        LoginUser user = jwtTokenParser.requireLoginUser(authorization);
+        return ApiResponse.ok(sessionService.events(user, sessionNo));
+    }
+
+    /**
      * 访客开会话请求体。
      */
     public record OpenBody(
@@ -90,8 +140,9 @@ public class SessionController {
             @Size(max = 64)
             String appKey,
 
-            @Size(max = 32)
-            String visitorKey,
+            /** 访客身份令牌（上次打开时服务端下发的，前端本地保存） */
+            @Size(max = 1024)
+            String visitorToken,
 
             @Size(max = 64)
             String visitorName

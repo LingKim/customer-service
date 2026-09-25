@@ -61,8 +61,13 @@ public class SessionApiClient {
             Long senderId,
             Integer msgType,
             String content,
+            Integer visibleTo,
             String sendTime
     ) {
+    }
+
+    /** 坐席接待量 */
+    public record AgentLoadView(Long agentId, Integer sessionCount) {
     }
 
     public SessionInfo requireSession(String tenantCode, String sessionNo) {
@@ -76,12 +81,13 @@ public class SessionApiClient {
         return unwrap(response);
     }
 
-    public List<MessageView> history(String tenantCode, String sessionNo, Long beforeId, int limit) {
+    public List<MessageView> history(String tenantCode, String sessionNo, Long beforeId, int limit, boolean agentView) {
         ApiResponse<List<MessageView>> response = restClient.get()
                 .uri(uriBuilder -> {
                     uriBuilder.path("/api/customer/internal/sessions/{sessionNo}/messages")
                             .queryParam("tenantCode", tenantCode)
-                            .queryParam("limit", limit);
+                            .queryParam("limit", limit)
+                            .queryParam("agentView", agentView);
                     if (beforeId != null) {
                         uriBuilder.queryParam("beforeId", beforeId);
                     }
@@ -99,7 +105,8 @@ public class SessionApiClient {
             int senderType,
             Long senderId,
             int msgType,
-            String content
+            String content,
+            int visibleTo
     ) {
         ApiResponse<MessageView> response = restClient.post()
                 .uri("/api/customer/internal/sessions/{sessionNo}/messages", sessionNo)
@@ -109,7 +116,8 @@ public class SessionApiClient {
                         "senderType", senderType,
                         "senderId", senderId == null ? 0L : senderId,
                         "msgType", msgType,
-                        "content", content
+                        "content", content,
+                        "visibleTo", visibleTo
                 ))
                 .retrieve()
                 .body(new ParameterizedTypeReference<ApiResponse<MessageView>>() {
@@ -118,8 +126,12 @@ public class SessionApiClient {
     }
 
     public SessionInfo assignAgent(String tenantCode, String sessionNo, long agentId) {
+        return claim(tenantCode, sessionNo, agentId);
+    }
+
+    public SessionInfo claim(String tenantCode, String sessionNo, long agentId) {
         ApiResponse<SessionInfo> response = restClient.post()
-                .uri("/api/customer/internal/sessions/{sessionNo}/assign", sessionNo)
+                .uri("/api/customer/internal/sessions/{sessionNo}/claim", sessionNo)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of("tenantCode", tenantCode, "agentId", agentId))
                 .retrieve()
@@ -128,13 +140,67 @@ public class SessionApiClient {
         return unwrap(response);
     }
 
-    public SessionInfo close(String tenantCode, String sessionNo) {
+    public SessionInfo release(String tenantCode, String sessionNo, long agentId) {
+        ApiResponse<SessionInfo> response = restClient.post()
+                .uri("/api/customer/internal/sessions/{sessionNo}/release", sessionNo)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("tenantCode", tenantCode, "agentId", agentId))
+                .retrieve()
+                .body(new ParameterizedTypeReference<ApiResponse<SessionInfo>>() {
+                });
+        return unwrap(response);
+    }
+
+    public SessionInfo transfer(
+            String tenantCode,
+            String sessionNo,
+            Long fromAgentId,
+            long toAgentId,
+            String remark
+    ) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("tenantCode", tenantCode);
+        body.put("fromAgentId", fromAgentId == null ? 0L : fromAgentId);
+        body.put("toAgentId", toAgentId);
+        if (remark != null && !remark.isBlank()) {
+            body.put("remark", remark);
+        }
+        ApiResponse<SessionInfo> response = restClient.post()
+                .uri("/api/customer/internal/sessions/{sessionNo}/transfer", sessionNo)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body)
+                .retrieve()
+                .body(new ParameterizedTypeReference<ApiResponse<SessionInfo>>() {
+                });
+        return unwrap(response);
+    }
+
+    public SessionInfo close(String tenantCode, String sessionNo, Long operatorId, String remark) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("tenantCode", tenantCode);
+        if (operatorId != null) {
+            body.put("operatorId", operatorId);
+        }
+        if (remark != null && !remark.isBlank()) {
+            body.put("remark", remark);
+        }
         ApiResponse<SessionInfo> response = restClient.post()
                 .uri("/api/customer/internal/sessions/{sessionNo}/close", sessionNo)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("tenantCode", tenantCode))
+                .body(body)
                 .retrieve()
                 .body(new ParameterizedTypeReference<ApiResponse<SessionInfo>>() {
+                });
+        return unwrap(response);
+    }
+
+    public List<AgentLoadView> workload(String tenantCode) {
+        ApiResponse<List<AgentLoadView>> response = restClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/customer/internal/sessions/workload")
+                        .queryParam("tenantCode", tenantCode)
+                        .build())
+                .retrieve()
+                .body(new ParameterizedTypeReference<ApiResponse<List<AgentLoadView>>>() {
                 });
         return unwrap(response);
     }

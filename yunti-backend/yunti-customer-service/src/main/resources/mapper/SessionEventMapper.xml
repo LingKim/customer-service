@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.customer.mapper.SessionEventMapper">
+
+    <!-- 会话流转记录 -->
+    <select id="selectBySession" resultType="java.util.Map">
+        SELECT e.id,
+               e.event_type  AS event_type,
+               e.operator_id AS operator_id,
+               e.from_value  AS from_value,
+               e.to_value    AS to_value,
+               e.remark      AS remark,
+               e.event_time  AS event_time
+          FROM session_event e
+         WHERE e.tenant_code = #{tenantCode}
+           AND e.session_id = #{sessionId}
+         ORDER BY e.event_time DESC, e.id DESC
+         LIMIT #{limit}
+    </select>
+    <!-- 坐席当前接待量：只统计"人工接待中"的会话 -->
+    <select id="selectAgentWorkload" resultType="java.util.Map">
+        SELECT s.agent_id       AS agent_id,
+               COUNT(1)         AS session_count
+          FROM session s
+         WHERE s.tenant_code = #{tenantCode}
+           AND s.agent_id IS NOT NULL
+           AND s.status = 3
+           AND s.is_deleted = FALSE
+         GROUP BY s.agent_id
+    </select>
+</mapper>
