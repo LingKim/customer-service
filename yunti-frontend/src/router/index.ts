@@ -40,6 +40,18 @@ const router = createRouter({
           component: () => import('../views/admin/review/index.vue'),
           meta: { title: '企业审核', requiresPlatform: true },
         },
+        {
+          path: 'channels',
+          name: 'Channels',
+          component: () => import('../views/channels/index.vue'),
+          meta: { title: '渠道接入', requiresEnterprise: true },
+        },
+        {
+          path: 'channels/setup/:stage/:channelId?',
+          name: 'ChannelSetup',
+          component: () => import('../views/channels/setup.vue'),
+          meta: { title: '渠道接入流程', requiresEnterprise: true },
+        },
       ],
     },
     {
@@ -67,6 +79,14 @@ router.beforeEach(async (to) => {
       try { await userStore.fetchProfile() } catch { return { name: 'Login' } }
     }
     if (userStore.userType !== 1) return { name: 'Dashboard' }
+  }
+  if (to.meta.requiresEnterprise) {
+    const userStore = useUserStore()
+    if (!userStore.userId) {
+      try { await userStore.fetchProfile() } catch { return { name: 'Login' } }
+    }
+    if (userStore.userType !== 2) return { name: 'Dashboard' }
+    if (!userStore.tenantCode || userStore.tenantCode === 'PLATFORM') return { name: 'Guide' }
   }
   return true
 })

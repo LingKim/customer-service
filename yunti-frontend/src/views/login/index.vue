@@ -78,6 +78,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Key, Lock, User } from '@element-plus/icons-vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { captchaApi } from '../../api/user'
+import { listChannels } from '../../api/customer/channel'
 import { useUserStore } from '../../stores/user'
 
 const router = useRouter()
@@ -125,7 +126,18 @@ async function handleLogin() {
       captchaId: captchaId.value,
       captchaCode: form.captchaCode,
     })
+    localStorage.removeItem('yunti_onboard_done')
     ElMessage.success('登录成功')
+    if (userStore.userType === 2 && userStore.tenantCode !== 'PLATFORM') {
+      try {
+        const channels = await listChannels()
+        if (channels.some((channel) => channel.status === 1)) {
+          localStorage.setItem('yunti_onboard_done', 'true')
+        }
+      } catch {
+        // 渠道列表异常不影响登录；进入页面后可以重试。
+      }
+    }
     const redirect = userStore.userType === 1 ? '/admin/reviews' : (route.query.redirect as string) || '/dashboard'
     router.push(redirect)
   } catch {

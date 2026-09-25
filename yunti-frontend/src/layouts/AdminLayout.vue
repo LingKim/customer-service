@@ -21,6 +21,10 @@
           <el-icon><OfficeBuilding /></el-icon>
           <span>企业信息</span>
         </el-menu-item>
+        <el-menu-item v-if="userStore.userType === 2" index="/channels">
+          <el-icon><Connection /></el-icon>
+          <span>渠道接入</span>
+        </el-menu-item>
         <el-menu-item v-if="userStore.userType === 1" index="/admin/reviews">
           <el-icon><Stamp /></el-icon>
           <span>企业审核</span>
@@ -71,7 +75,9 @@ onMounted(async () => {
     if (userStore.userType === 1) return
     const guide = await getEnterpriseGuide()
     const done = localStorage.getItem(DONE_KEY) === 'true'
-    if ((guide.stage !== 'APPROVED' || !done) && router.currentRoute.value.name !== 'EnterpriseReview') {
+    const routeName = router.currentRoute.value.name
+    const onboardingRoute = routeName === 'Channels' || routeName === 'ChannelSetup'
+    if ((guide.stage !== 'APPROVED' || (!done && !onboardingRoute)) && routeName !== 'EnterpriseReview') {
       await router.replace('/guide')
     }
   } catch {

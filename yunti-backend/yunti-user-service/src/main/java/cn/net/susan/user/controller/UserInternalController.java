@@ -12,13 +12,19 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 内部接口：仅供 tenant-service 审核通过后回填用户租户编码。
@@ -79,5 +85,37 @@ public class UserInternalController {
             @NotBlank(message = "租户编码不能为空")
             String tenantCode
     ) {
+    }
+
+    @GetMapping("/users/names")
+    public ApiResponse<Map<String, String>> userNames(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestParam String ids) {
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            throw new BizException(ResultCode.UNAUTHORIZED);
+        }
+        LoginUser requester = jwtService.parseToken(authorization.substring(7).trim());
+        if (requester.tenantCode() == null || "PLATFORM".equals(requester.tenantCode())) {
+            throw new BizException(ResultCode.FORBIDDEN);
+        }
+        List<Long> userIds;
+        try {
+            userIds = Arrays.stream(ids.split(","))
+                    .map(String::trim).filter(s -> !s.isBlank()).map(Long::parseLong).distinct().toList();
+        } catch (NumberFormatException e) {
+            throw new BizException(40001, "用户 ID 格式不正确");
+        }
+        if (userIds.size() > 50) {
+            throw new BizException(40001, "一次最多查询 50 位用户");
+        }
+        if (userIds.isEmpty()) {
+            return ApiResponse.ok(Map.of());
+        }
+        Map<String, String> names = sysUserMapper.selectBatchIds(userIds).stream()
+                .filter(u -> !Boolean.TRUE.equals(u.getDeleted()))
+                .filter(u -> requester.tenantCode().equals(u.getTenantCode()))
+                .collect(Collectors.toMap(u -> String.valueOf(u.getId()),
+                        u -> u.getName() == null ? "" : u.getName(), (a, b) -> a));
+        return ApiResponse.ok(names);
     }
 }

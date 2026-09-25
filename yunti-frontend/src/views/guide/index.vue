@@ -96,8 +96,9 @@
           <h1>企业已完成开通</h1>
           <p>租户编码：{{ guide.tenantCode || '待分配' }}</p>
           <p v-if="userStore.tenantCode === 'PLATFORM'">租户已开通，请重新登录以获取新的租户身份。</p>
-                    <el-button type="primary" size="large" @click="enterWorkspace">
-            {{ userStore.tenantCode === 'PLATFORM' ? '重新登录' : '进入工作台' }}
+          <p v-else>下一步接入第一个客服渠道。</p>
+          <el-button type="primary" size="large" @click="enterWorkspace">
+            {{ userStore.tenantCode === 'PLATFORM' ? '重新登录' : '接入渠道' }}
           </el-button>
         </el-card>
       </template>
@@ -249,8 +250,7 @@ function enterWorkspace() {
     localStorage.removeItem(DONE_KEY)
     router.push('/login')
   } else {
-    localStorage.setItem(DONE_KEY, 'true')
-    router.push('/dashboard')
+    router.push('/channels')
   }
 }
 function openLogout() { logoutVisible.value = true }
