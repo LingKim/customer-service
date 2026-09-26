@@ -213,6 +213,17 @@
             />
             <div class="ci-actions">
               <div class="ci-left">
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :disabled="isClosed"
+                  title="不会答的问题，问一下知识库：AI 查完资料给你答案和出处"
+                  @click="openKnowledgeAssistant"
+                >
+                  <el-icon class="btn-icon"><MagicStick /></el-icon>
+                  知识助手
+                </el-button>
                 <el-switch v-model="noteMode" :disabled="isClosed" active-text="内部备注" />
                 <span class="ci-tip">
                   {{ noteMode ? '备注不会发给客户' : isClosed ? '会话已结束' : '消息会实时送达客户' }}
@@ -271,6 +282,13 @@
         <el-button type="danger" @click="closeSession">确认结束</el-button>
       </template>
     </el-dialog>
+    <!-- 知识助手：坐席接待时遇到不会答的问题，问知识库，答案可以直接填进回复 -->
+    <KnowledgeAssistant
+      v-model:visible="kbAskVisible"
+      :default-question="kbAskDefault"
+      insertable
+      @insert="onInsertKnowledge"
+    />
   </div>
 </template>
 <script setup lang="ts">
@@ -292,6 +310,7 @@ import { listChannels, type ChannelResult } from '../../api/customer/channel'
 import { fetchPresence } from '../../api/realtime'
 import { fetchAgentStatuses, updateAgentStatus, type AgentStatusItem } from '../../api/customer/agentStatus'
 import { fetchSessionQaAlerts, handleQaAlert, type QaAlertItem } from '../../api/customer/qa'
+import KnowledgeAssistant from '../../components/KnowledgeAssistant.vue'
 import { openVisitorTestTab } from '../../utils/visitor'
 import {
   getSessionDetail,
@@ -342,6 +361,9 @@ const myStatus = ref(1)
 const agentStatuses = ref<Record<string, AgentStatusItem>>({})
 /** 当前会话的实时质检告警（边聊边检命中后由长连接推过来） */
 const qaAlerts = ref<QaAlertItem[]>([])
+/** 知识助手：坐席问知识库（AI 查资料后回答，可把答案填进回复） */
+const kbAskVisible = ref(false)
+const kbAskDefault = ref('')
 /** 还等着处理的告警数：>0 时聊天区顶部挂警示条 */
 const pendingQaAlerts = computed(() => qaAlerts.value.filter((item) => item.status === 1).length)
 /** 待处理的告警明细：警示条只展示前几条，其余引导去质检中心 */
@@ -1232,6 +1254,29 @@ function setVisitorPresence(sessionNo: string, online: boolean) {
     next[sessionNo] = Date.now()
   }
   offlineSince.value = next
+}
+
+/**
+ * 打开知识助手：默认把客户最后一句带过去。
+ *
+ * 坐席最常见的场景是"客户问了我不确定的问题"——让他重新打一遍问题很多余，
+ * 直接把客户那句话丢进去，点一下就能看答案。
+ */
+function openKnowledgeAssistant() {
+  const lastCustomer = [...messages.value]
+    .reverse()
+    .find((item) => item.senderType === 1 && (item.content || '').trim())
+  kbAskDefault.value = lastCustomer?.content?.trim() || ''
+  kbAskVisible.value = true
+}
+
+/** 把知识助手的答案填进回复框：只填不发，坐席确认后再发（避免 AI 的话直接发给客户） */
+function onInsertKnowledge(text: string) {
+  const value = (text || '').trim()
+  if (!value) {
+    return
+  }
+  draft.value = (draft.value || '').trim() ? `${draft.value.trim()}\n${value}` : value
 }
 
 /** 被自动分配的会话在列表里闪两下，提示"有新单进来了" */

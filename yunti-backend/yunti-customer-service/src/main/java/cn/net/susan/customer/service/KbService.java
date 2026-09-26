@@ -25,6 +25,7 @@ import java.io.InputStream;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -229,6 +230,74 @@ public class KbService {
         result.put("results", hits.stream().map(this::toHitVO).toList());
         result.put("vectorReady", aiClient.healthy());
         return result;
+    }
+
+    /**
+     * 知识问答：让 AI 先查知识库、再照着资料回答，并把出处带回来。
+     *
+     * <p>这一层只做三件事：租户校验、参数校验、把 Python 那边的下划线字段转成前端用的驼峰。
+     * 检索与编排都在 yunti-ai（LangGraph），Java 不重复实现。</p>
+     */
+    public AskResult ask(LoginUser user, String question, Integer topK) {
+        String tenant = tenantOf(user);
+        if (question == null || question.isBlank()) {
+            throw new BizException(40001, "请输入要问的问题");
+        }
+        int size = topK == null ? 5 : Math.max(1, Math.min(topK, 20));
+        Map<String, Object> raw = aiClient.ask(tenant, question.trim(), size);
+
+        List<CitationVO> citations = new ArrayList<>();
+        Object rawCitations = raw.get("citations");
+        if (rawCitations instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> map) {
+                    citations.add(new CitationVO(
+                            intOf(map.get("index")),
+                            str(map.get("chunk_id")),
+                            str(map.get("doc_id")),
+                            str(map.get("doc_title")),
+                            intOf(map.get("chunk_no")),
+                            doubleOf(map.get("score")),
+                            str(map.get("content"))));
+                }
+            }
+        }
+
+        List<StepVO> steps = new ArrayList<>();
+        Object rawSteps = raw.get("steps");
+        if (rawSteps instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> map) {
+                    steps.add(new StepVO(str(map.get("node")), str(map.get("detail"))));
+                }
+            }
+        }
+        return new AskResult(
+                str(raw.get("question")),
+                str(raw.get("answer")),
+                str(raw.get("engine")),
+                str(raw.get("mode")),
+                Boolean.TRUE.equals(raw.get("enough")),
+                citations,
+                steps);
+    }
+
+    private String str(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private int intOf(Object value) {
+        if (value == null) {
+            return 0;
+        }
+        return value instanceof Number number ? number.intValue() : Integer.parseInt(String.valueOf(value));
+    }
+
+    private double doubleOf(Object value) {
+        if (value == null) {
+            return 0;
+        }
+        return value instanceof Number number ? number.doubleValue() : Double.parseDouble(String.valueOf(value));
     }
 
     // ---------------------------------------------------------------- 写
@@ -705,5 +774,36 @@ public class KbService {
 
     /** 分类视图 */
     public record CategoryVO(String id, String parentId, String name, int sortNo, long docCount) {
+    }
+
+    /** 知识问答结果 */
+    public record AskResult(
+            String question,
+            String answer,
+            /** 编排引擎：langgraph / linear */
+            String engine,
+            /** 检索口径：vector / keyword-local-vector / keyword */
+            String mode,
+            /** 召回结果是否够用（不够时回答会保守一些） */
+            boolean enough,
+            List<CitationVO> citations,
+            List<StepVO> steps
+    ) {
+    }
+
+    /** 引用来源：回答里的 [n] 对应这里的第 n 条 */
+    public record CitationVO(
+            int index,
+            String chunkId,
+            String docId,
+            String docTitle,
+            int chunkNo,
+            double score,
+            String content
+    ) {
+    }
+
+    /** 编排轨迹：每一步做了什么，前端展示"这次是怎么查的" */
+    public record StepVO(String node, String detail) {
     }
 }

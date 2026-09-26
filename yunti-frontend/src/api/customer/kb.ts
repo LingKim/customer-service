@@ -168,3 +168,38 @@ export function createKbCategory(data: {
 export function searchKb(data: { query: string; topK?: number }): Promise<KbSearchResult> {
   return request<KbSearchResult>({ url: '/customer/kb/search', method: 'post', data })
 }
+
+/** 引用来源：回答里的 [n] 对应这里第 n 条 */
+export interface KbCitation {
+  index: number
+  chunkId: string
+  docId: string
+  docTitle: string
+  chunkNo: number
+  score: number
+  content: string
+}
+
+/** 编排轨迹：这次是怎么查的 */
+export interface KbAskStep {
+  node: string
+  detail: string
+}
+
+export interface KbAskResult {
+  question: string
+  answer: string
+  /** 编排引擎：langgraph / linear */
+  engine: string
+  /** 检索口径：vector / keyword-local-vector / keyword */
+  mode: string
+  /** 召回是否够用 */
+  enough: boolean
+  citations: KbCitation[]
+  steps: KbAskStep[]
+}
+
+/** 知识问答：让 AI 先查知识库再回答，并带回出处 */
+export function askKb(data: { question: string; topK?: number }): Promise<KbAskResult> {
+  return request<KbAskResult>({ url: '/customer/kb/ask', method: 'post', data, timeout: 120000 })
+}

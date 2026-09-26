@@ -12,6 +12,10 @@
           <el-icon class="btn-icon"><Refresh /></el-icon>
           刷新
         </el-button>
+        <el-button @click="openAsk">
+          <el-icon class="btn-icon"><MagicStick /></el-icon>
+          智能问答
+        </el-button>
         <el-button @click="openSearch">
           <el-icon class="btn-icon"><Search /></el-icon>
           检索测试
@@ -323,11 +327,14 @@
         />
       </div>
     </el-dialog>
+    <!-- 知识助手（公共组件，工作台里用的是同一个） -->
+    <KnowledgeAssistant v-model:visible="askVisible" />
   </div>
 </template>
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import KnowledgeAssistant from '../../components/KnowledgeAssistant.vue'
 import {
   changeKbDocumentStatus,
   createKbCategory,
@@ -389,6 +396,9 @@ const searchVisible = ref(false)
 const searching = ref(false)
 const searchQuery = ref('')
 const searchResult = ref<KbSearchResult | null>(null)
+
+/** 知识助手弹框（内容都在公共组件里，这里只管开关） */
+const askVisible = ref(false)
 /** 是否是关键词兜底模式：是的话分值是"匹配度"，不是余弦相似度，标签也要跟着换 */
 const keywordMode = computed(() => (searchResult.value?.mode || '').includes('keyword'))
 
@@ -619,6 +629,13 @@ async function doSearch() {
   }
 }
 
+/* ---------------- 知识助手 ---------------- */
+
+/** 打开知识助手弹框（问答逻辑都在公共组件里） */
+function openAsk() {
+  askVisible.value = true
+}
+
 /* ---------------- 展示辅助 ---------------- */
 
 function statusTag(status: number) {
@@ -751,10 +768,5 @@ function formatSize(size: number) {
 .search-meta { margin-top: 10px; font-size: 13px; color: #64748b; }
 .search-hint { margin-top: 6px; font-size: 12px; color: #b45309; line-height: 1.7; }
 .search-hint code { background: #fff7ed; padding: 0 4px; border-radius: 4px; }
-.hit-list { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow: auto; }
-.hit-item { border: 1px solid #e6ebf2; border-radius: 10px; padding: 10px 12px; }
-.hit-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 12px; color: #94a3b8; }
-.hit-doc { font-weight: 700; color: #0f172a; font-size: 13px; }
-.hit-score { margin-left: auto; color: #2563eb; font-weight: 600; }
-.hit-content { font-size: 13px; color: #334155; line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
+
 </style>

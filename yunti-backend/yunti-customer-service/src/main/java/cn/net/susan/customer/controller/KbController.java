@@ -171,6 +171,28 @@ public class KbController {
         return ApiResponse.ok(kbService.search(user, body.query(), body.topK()));
     }
 
+    /** 知识问答：让 AI 查资料后回答并标出处 */
+    @PostMapping("/ask")
+    public ApiResponse<KbService.AskResult> ask(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @Valid @RequestBody AskBody body
+    ) {
+        LoginUser user = jwtTokenParser.requireLoginUser(authorization);
+        return ApiResponse.ok(kbService.ask(user, body.question(), body.topK()));
+    }
+
+    /** 知识问答请求体 */
+    public record AskBody(
+            @NotBlank(message = "请输入要问的问题")
+            @Size(max = 500)
+            String question,
+
+            @Min(value = 1, message = "最多参考 1~20 条资料")
+            @Max(value = 20, message = "最多参考 1~20 条资料")
+            Integer topK
+    ) {
+    }
+
     /** 新建 / 编辑文档请求体 */
     public record DocumentBody(
             @Size(max = 255)

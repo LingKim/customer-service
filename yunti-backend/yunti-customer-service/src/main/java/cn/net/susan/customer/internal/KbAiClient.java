@@ -146,6 +146,31 @@ public class KbAiClient {
     }
 
     /**
+     * 知识问答：把问题交给 RAG 编排（检索 → 判断 → 生成 → 校验引用）。
+     *
+     * @return 原始响应（answer / citations / steps 等，键名是下划线风格）
+     */
+    public Map<String, Object> ask(String tenantCode, String question, int topK) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("tenantCode", tenantCode);
+        body.put("question", question);
+        body.put("topK", topK);
+        try {
+            String response = postJson(baseUrl + "/api/ai/v1/rag/ask", body, tenantCode);
+            if (logPayload) {
+                log.info("知识问答响应 tenant={} question={} body={}",
+                        tenantCode, question, safe(response));
+            }
+            return objectMapper.readValue(response, new TypeReference<>() {
+            });
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BizException(50001, "知识问答失败：" + friendly(e));
+        }
+    }
+
+    /**
      * 删除某个文档的全部切片（文档删除 / 下线时调用）。
      */
     public void deleteChunks(String tenantCode, long docId) {

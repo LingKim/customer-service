@@ -77,112 +77,11 @@ def _keyword_hit(text: str, rule_name: str) -> bool:
     return any(word in text for word in keywords.get(rule_name, []))
 
 
-def _provider_conf(name: str, api_key: str, base_url: str, model: str) -> dict[str, str]:
-    return {
-        "provider": name,
-        "api_key": api_key,
-        "base_url": (base_url or "").rstrip("/"),
-        "model": model,
-    }
-
-
-async def _call_chat(chosen: dict[str, str], payload: dict[str, Any], timeout: int) -> dict[str, Any]:
-    """调用 OpenAI 兼容的 /chat/completions 接口，并打印真实请求体。"""
-    if get_settings().llm_log_payload:
-        logger.info("AI 质检模型入参 trace=%s provider=%s model=%s payload=%s",
-                    get_trace_id() or "-", chosen["provider"], chosen["model"],
-                    json.dumps(payload, ensure_ascii=False))
-    headers = {"Authorization": f"Bearer {chosen['api_key']}", "Content-Type": "application/json"}
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(
-            f"{chosen['base_url']}/chat/completions",
-            headers=headers,
-            json=payload,
-        )
-        response.raise_for_status()
-        return response.json()
-
-
-def _choose_provider(provider: str | None, model: str | None):
-    """挑选真实可用的模型供应商。
-
-    优先级：显式指定 > 全局默认配置 > 自动选择已配置密钥的厂商（千问优先）。
-    只有所有厂商都没有密钥时才返回 None，此时质检走本地规则兜底。
-    这样即使 provider 仍是骨架默认的 mock，只要配了密钥就会用真实模型。
-    """
-    settings = get_settings()
-    requested = (provider or settings.llm_default_provider or "").lower()
-    if "deepseek" in requested:
-        return _provider_conf(
-            "deepseek", settings.deepseek_api_key, settings.deepseek_base_url,
-            model or settings.deepseek_model,
-        )
-    if "qwen" in requested or "dashscope" in requested:
-        return _provider_conf(
-            "qwen", settings.qwen_api_key, settings.qwen_base_url,
-            model or settings.qwen_model,
-        )
-    # provider=mock / 未配置：只要配了厂商密钥就用真实模型
-    if settings.qwen_api_key:
-        logger.info("未指定真实模型供应商（provider=%s），自动使用千问 model=%s",
-                    requested or "空", model or settings.qwen_model)
-        return _provider_conf(
-            "qwen", settings.qwen_api_key, settings.qwen_base_url,
-            model or settings.qwen_model,
-        )
-    if settings.deepseek_api_key:
-        logger.info("未指定真实模型供应商（provider=%s），自动使用 DeepSeek model=%s",
-                    requested or "空", model or settings.deepseek_model)
-        return _provider_conf(
-            "deepseek", settings.deepseek_api_key, settings.deepseek_base_url,
-            model or settings.deepseek_model,
-        )
-    return None
-
-
-# 租户模型配置缓存：批量质检时避免每个任务都查一次库
-_TENANT_MODEL_TTL = 60.0
-_tenant_model_cache: dict[str, tuple[float, tuple[str | None, str | None]]] = {}
-
-
-def _tenant_model(tenant_code: str) -> tuple[str | None, str | None]:
-    """读取租户在「智能机器人 → 模型选择」里配置的模型。
-
-    读不到（未配置 / 数据库不可用）时返回 ``(None, None)``，不影响质检主流程。
-    """
-    if not tenant_code:
-        return None, None
-    now = time.monotonic()
-    cached = _tenant_model_cache.get(tenant_code)
-    if cached and now - cached[0] < _TENANT_MODEL_TTL:
-        return cached[1]
-
-    resolved: tuple[str | None, str | None] = (None, None)
-    try:
-        with connect() as conn:
-            row = conn.execute(
-                """SELECT m.provider, m.model_key
-                     FROM bot_setting s
-                     JOIN bot_model m
-                       ON m.tenant_code = s.tenant_code AND m.model_key = s.model_key
-                    WHERE s.tenant_code = %s AND s.is_deleted = FALSE
-                    LIMIT 1""",
-                (tenant_code,),
-            ).fetchone()
-        if row:
-            provider = (row.get("provider") or "").lower()
-            model_key = (row.get("model_key") or "").lower()
-            # provider 列可能被写成平台自定义值（如 yunti），此时按模型名兜底识别
-            if "deepseek" in provider or "deepseek" in model_key:
-                resolved = ("deepseek", row.get("model_key"))
-            elif "qwen" in provider or "dashscope" in provider or "qwen" in model_key:
-                resolved = ("qwen", row.get("model_key"))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("读取租户模型配置失败 tenant=%s error=%s: %s",
-                       tenant_code, type(exc).__name__, exc)
-
-    _tenant_model_cache[tenant_code] = (now, resolved)
-    return resolved
+# 供应商选择 / 对话调用 / 租户模型配置统一走 core.llm_chat（第 21 篇抽出来的公共层），
+# 这里保留原有的私有名字，业务代码不用改。
+from ..core.llm_chat import call_chat as _call_chat  # noqa: E402
+from ..core.llm_chat import choose_provider as _choose_provider  # noqa: E402
+from ..core.llm_chat import tenant_model as _tenant_model  # noqa: E402
 
 
 async def evaluate(
@@ -201,7 +100,9 @@ async def evaluate(
     requested_model = model
     # 数据库里配了模型就优先用（来自「智能机器人 → 模型选择」）
     if not requested_provider:
-        tenant_provider, tenant_model = _tenant_model(tenant_code)
+        tenant_config = _tenant_model(tenant_code) or {}
+        tenant_provider = tenant_config.get("provider")
+        tenant_model = tenant_config.get("model")
         if tenant_provider:
             requested_provider = tenant_provider
             requested_model = requested_model or tenant_model

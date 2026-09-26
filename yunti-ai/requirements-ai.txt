@@ -1,16 +1,31 @@
-# 可选：接入 LangGraph / LlamaIndex / 消息队列 / 模型 SDK
-langchain>=0.3
-langgraph>=0.2
-langchain-openai>=0.2
-# 知识库（第 20 篇）：解析 docx/pdf 要 readers-file，向量化要 embeddings-openai
+# =====================================================================
+# yunti-ai 的可选依赖（AI 能力）
+#   pip 不在 PATH 上，用项目自带的：./.venv/bin/pip install -r requirements-ai.txt
+#   国内网络慢：加 -i https://pypi.tuna.tsinghua.edu.cn/simple
+# =====================================================================
+
+# ---------- 知识库真正必需的（第 20 篇）----------
+# 读文件用 SimpleDirectoryReader、切块用 SentenceSplitter、向量化分流走 OpenAIEmbedding
 llama-index>=0.11
+# Reader 实现：docx / pdf / md 等格式的解析器都在这
 llama-index-readers-file>=0.4
-# LlamaIndex 读 docx 走 DocxReader，它内部依赖 docx2txt（不装会在读 docx 时报 'docx2txt is required'）
-docx2txt>=0.8
+# OpenAI 系模型的向量化（千问这类非官方模型名走项目自己的客户端，见 llama_engine.py）
 llama-index-embeddings-openai>=0.3
-pgvector>=0.3
-# 中文 PDF 多为 CID 编码字体，内置兜底解析读不出来，pypdf 才能读
+# 中文 PDF 多为 CID 编码字体，内置兜底解析读不出来，只有 pypdf 能读
 pypdf>=5
+
+# ---------- 知识库的间接依赖 ----------
+# LlamaIndex 的 DocxReader 内部依赖它；缺了传 Word 会报 "docx2txt is required"
+docx2txt>=0.8
+
+# ---------- RAG 编排必需（第 21 篇）----------
+# 知识问答的"检索 → 判断 → 改写重检 → 生成 → 校验引用"用它的 StateGraph 编排；
+# 没装也能跑（退化成线性实现），但就看不到编排过程了
+langgraph>=0.2
+
+# ---------- 预留给后续章节（当前代码还没用到）----------
+langchain>=0.3
+langchain-openai>=0.2
+openai>=1.40
 redis>=5
 kafka-python>=2.2
-openai>=1.40

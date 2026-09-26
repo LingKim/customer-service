@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-v3"
     embedding_timeout: int = 30
 
+    def embedding_key(self) -> str:
+        """向量化用哪个密钥。
+
+        优先专用的 ``embedding_api_key``；没配就**复用千问的 key**——
+        千问的对话和向量化是同一个账号同一套 OpenAI 兼容接口，
+        让用户把同一个密钥配两遍（少配一处就悄悄退化成兜底向量）是个坑。
+        """
+        return self.embedding_api_key or self.qwen_api_key
+
     # 知识库：切片参数与数据源（切片存在 customer_db，和文档表同库，租户隔离靠 tenant_code）
     kb_database_url: str = ""
     # 切块大小：内置实现按"字符"算，LlamaIndex 按"token"算（同数值粒度不同，可按需分别调）

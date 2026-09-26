@@ -42,7 +42,8 @@ def embed_texts(texts: list[str], *, tenant_code: str = "", trace_id: str = "") 
     if not texts:
         return [], "none"
     settings = get_settings()
-    if settings.embedding_api_key and settings.embedding_provider != "local":
+    # 没单独配向量密钥时复用千问的 key（同一个账号），避免"明明配了密钥却还在用兜底向量"
+    if settings.embedding_key() and settings.embedding_provider != "local":
         try:
             vectors = _embed_remote(texts, settings, tenant_code=tenant_code, trace_id=trace_id)
             return vectors, f"{settings.embedding_provider}:{settings.embedding_model}"
