@@ -91,4 +91,84 @@ public interface SessionMapper extends BaseMapper<Session> {
             @Param("oldest") java.time.LocalDateTime oldest,
             @Param("limit") int limit
     );
+
+    // ------------------------------------------------------------------ 数据大屏 / 坐席绩效
+
+    /** 大屏"此刻"：在线坐席、忙碌坐席、排队 / 进行中 / 机器人接待中的会话数 */
+    Map<String, Object> selectRealtimeOverview(
+            @Param("tenantCode") String tenantCode,
+            @Param("dayStart") java.time.LocalDateTime dayStart,
+            @Param("now") java.time.LocalDateTime now
+    );
+
+    /** 大屏"今日"：会话 / 消息 / 评价 / 首响 / 机器人占比 */
+    Map<String, Object> selectTodayMetrics(
+            @Param("tenantCode") String tenantCode,
+            @Param("dayStart") java.time.LocalDateTime dayStart,
+            @Param("now") java.time.LocalDateTime now
+    );
+
+    /** 今日 24 小时会话趋势（只返回有数据的小时） */
+    List<Map<String, Object>> selectHourlyTrend(
+            @Param("tenantCode") String tenantCode,
+            @Param("dayStart") java.time.LocalDateTime dayStart,
+            @Param("now") java.time.LocalDateTime now
+    );
+
+    /** 今日渠道分布 */
+    List<Map<String, Object>> selectChannelDistribution(
+            @Param("tenantCode") String tenantCode,
+            @Param("dayStart") java.time.LocalDateTime dayStart,
+            @Param("now") java.time.LocalDateTime now
+    );
+
+    /** 今日意图 Top（机器人 / 大脑识别的结果） */
+    List<Map<String, Object>> selectIntentDistribution(
+            @Param("tenantCode") String tenantCode,
+            @Param("dayStart") java.time.LocalDateTime dayStart,
+            @Param("now") java.time.LocalDateTime now
+    );
+
+    /** 今日情绪分布 */
+    List<Map<String, Object>> selectEmotionDistribution(
+            @Param("tenantCode") String tenantCode,
+            @Param("dayStart") java.time.LocalDateTime dayStart,
+            @Param("now") java.time.LocalDateTime now
+    );
+
+    /** 今日坐席排行（大屏右侧） */
+    List<Map<String, Object>> selectTodayAgentRanking(
+            @Param("tenantCode") String tenantCode,
+            @Param("dayStart") java.time.LocalDateTime dayStart,
+            @Param("now") java.time.LocalDateTime now,
+            @Param("limit") int limit
+    );
+
+    /** 大屏「坐席实时状态」：在线 / 忙碌状态 + 今日服务量 */
+    List<Map<String, Object>> selectAgentLive(
+            @Param("tenantCode") String tenantCode,
+            @Param("dayStart") java.time.LocalDateTime dayStart,
+            @Param("now") java.time.LocalDateTime now,
+            @Param("limit") int limit
+    );
+
+    /** 大屏「实时动态」：今天的会话 / 转人工 / 评价 / 工单 / 质检预警事件流 */
+    List<Map<String, Object>> selectRecentActivity(
+            @Param("tenantCode") String tenantCode,
+            @Param("dayStart") java.time.LocalDateTime dayStart,
+            @Param("now") java.time.LocalDateTime now,
+            @Param("limit") int limit
+    );
+
+    /** 坐席绩效下钻：某个坐席在时间范围内的会话明细 */
+    List<Map<String, Object>> selectAgentSessionsForReport(
+            @Param("tenantCode") String tenantCode,
+            @Param("agentId") Long agentId,
+            @Param("from") java.time.LocalDateTime from,
+            @Param("to") java.time.LocalDateTime to,
+            @Param("limit") int limit
+    );
+
+    /** 有会话数据的租户（绩效定时重算按租户逐个跑） */
+    List<String> selectTenantsForMetrics();
 }

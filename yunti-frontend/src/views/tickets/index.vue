@@ -1205,7 +1205,9 @@ async function copyTenant(code?: string | null) {
 /** 从工作台"会话转工单"时带着会话号进来（query: sessionNo=...） */
 function openCreateFromQuery() {
   const sessionNo = String(router.currentRoute.value.query.sessionNo ?? '').trim()
-  if (!sessionNo) {
+  const customerName = String(router.currentRoute.value.query.customerName ?? '').trim()
+  const createFlag = String(router.currentRoute.value.query.create ?? '').trim()
+  if (!sessionNo && !customerName && createFlag !== '1') {
     return
   }
   // 只读角色（质检专员 / AI运营）从工作台点"转工单"过来：直接说清楚，别让人填完表单才报错
@@ -1214,7 +1216,14 @@ function openCreateFromQuery() {
     void router.replace({ path: '/modules/tickets' })
     return
   }
-  openCreate({ sessionNo, title: '会话转工单', content: '' })
+  if (sessionNo) {
+    openCreate({ sessionNo, title: '会话转工单', content: '' })
+  } else if (customerName) {
+    const title = String(router.currentRoute.value.query.title ?? '').trim()
+    openCreate({ customerName, title: title || `${customerName} 的咨询`, content: '' })
+  } else {
+    openCreate()
+  }
   void router.replace({ path: '/modules/tickets' })
 }
 

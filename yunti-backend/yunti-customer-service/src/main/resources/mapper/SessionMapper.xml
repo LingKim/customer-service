@@ -185,4 +185,341 @@
            AND status IN (1, 2)
            AND is_deleted = FALSE
     </select>
+
+    <!-- ================================ 数据大屏（今天 / 此刻） ================================ -->
+
+    <select id="selectRealtimeOverview" resultType="java.util.Map">
+        SELECT
+            (SELECT COUNT(1) FROM agent_status a
+              WHERE a.tenant_code = #{tenantCode} AND a.is_deleted = FALSE
+                AND a.is_connected = TRUE AND a.status = 1)                        AS online_agents,
+            (SELECT COUNT(1) FROM agent_status a
+              WHERE a.tenant_code = #{tenantCode} AND a.is_deleted = FALSE
+                AND a.is_connected = TRUE AND a.status &lt;&gt; 1)                     AS busy_agents,
+            -- 「在线坐席 4/7」的分母：租户下已登记过状态的坐席总数（登录过长连接的都会有一条）
+            (SELECT COUNT(1) FROM agent_status a
+              WHERE a.tenant_code = #{tenantCode} AND a.is_deleted = FALSE)        AS total_agents,
+            (SELECT COUNT(1) FROM session s
+              WHERE s.tenant_code = #{tenantCode} AND s.is_deleted = FALSE
+                AND s.status = 1)                                                  AS queuing_sessions,
+            (SELECT COUNT(1) FROM session s
+              WHERE s.tenant_code = #{tenantCode} AND s.is_deleted = FALSE
+                AND s.status IN (2, 3))                                            AS active_sessions,
+            (SELECT COUNT(1) FROM session s
+              WHERE s.tenant_code = #{tenantCode} AND s.is_deleted = FALSE
+                AND s.status = 2)                                                  AS bot_sessions
+    </select>
+    <select id="selectTodayMetrics" resultType="java.util.Map">
+        WITH today AS (
+            SELECT s.id, s.status, s.bot_transfer_reason, s.csat_score
+              FROM session s
+             WHERE s.tenant_code = #{tenantCode}
+               AND s.is_deleted = FALSE
+               AND s.start_time &gt;= #{dayStart}
+               AND s.start_time &lt; #{now}
+        ),
+        msg AS (
+            SELECT COUNT(1)                                          AS total,
+                   COUNT(1) FILTER (WHERE m.sender_type = 1)         AS customer_total
+              FROM session_message m
+             WHERE m.tenant_code = #{tenantCode}
+               AND m.is_deleted = FALSE
+               AND m.send_time &gt;= #{dayStart}
+               AND m.send_time &lt; #{now}
+        ),
+        csat AS (
+            SELECT COUNT(1) AS cnt,
+                   COUNT(1) FILTER (WHERE c.score &gt;= 4) AS good_cnt,
+                   ROUND(AVG(c.score)::numeric, 2) AS score
+              FROM csat_record c
+             WHERE c.tenant_code = #{tenantCode}
+               AND c.is_deleted = FALSE
+               AND c.evaluate_time &gt;= #{dayStart}
+        ),
+        -- 首次响应：客户最后一条 → 坐席第一条（只算对客户可见的回复）
+        first_resp AS (
+            SELECT AVG(EXTRACT(EPOCH FROM (fa.first_at - lc.last_at))) AS seconds
+              FROM today t
+              JOIN LATERAL (
+                    SELECT MIN(m.send_time) AS first_at
+                      FROM session_message m
+                     WHERE m.tenant_code = #{tenantCode}
+                       AND m.session_id = t.id
+                       AND m.sender_type = 2
+                       AND m.visible_to = 1
+                       AND m.is_deleted = FALSE
+                   ) fa ON TRUE
+              JOIN LATERAL (
+                    SELECT MAX(m.send_time) AS last_at
+                      FROM session_message m
+                     WHERE m.tenant_code = #{tenantCode}
+                       AND m.session_id = t.id
+                       AND m.sender_type = 1
+                       AND m.is_deleted = FALSE
+                   ) lc ON TRUE
+             WHERE fa.first_at IS NOT NULL AND lc.last_at IS NOT NULL
+        )
+        SELECT (SELECT COUNT(1) FROM today)                                     AS session_today,
+               (SELECT COUNT(1) FROM today WHERE bot_transfer_reason IS NOT NULL
+                                          OR status = 2)                        AS bot_session_today,
+               (SELECT total FROM msg)                                          AS message_today,
+               (SELECT customer_total FROM msg)                                 AS customer_message_today,
+               (SELECT cnt FROM csat)                                           AS csat_count_today,
+               (SELECT good_cnt FROM csat)                                      AS csat_good_today,
+               (SELECT score FROM csat)                                         AS csat_score_today,
+               (SELECT COALESCE(ROUND(seconds)::INT, 0) FROM first_resp)         AS first_response_seconds
+    </select>
+    <select id="selectHourlyTrend" resultType="java.util.Map">
+        SELECT EXTRACT(HOUR FROM s.start_time)::int AS hour,
+               COUNT(1)                             AS cnt
+          FROM session s
+         WHERE s.tenant_code = #{tenantCode}
+           AND s.is_deleted = FALSE
+           AND s.start_time &gt;= #{dayStart}
+           AND s.start_time &lt; #{now}
+         GROUP BY 1
+         ORDER BY 1
+    </select>
+    <select id="selectChannelDistribution" resultType="java.util.Map">
+        SELECT COALESCE(ch.name, s.source, '未知渠道') AS name,
+               COUNT(1)                               AS cnt
+          FROM session s
+          LEFT JOIN channel ch ON ch.id = s.channel_id
+         WHERE s.tenant_code = #{tenantCode}
+           AND s.is_deleted = FALSE
+           AND s.start_time &gt;= #{dayStart}
+           AND s.start_time &lt; #{now}
+         GROUP BY 1
+         ORDER BY cnt DESC
+         LIMIT 6
+    </select>
+    <select id="selectIntentDistribution" resultType="java.util.Map">
+        SELECT s.intent AS name, COUNT(1) AS cnt
+          FROM session s
+         WHERE s.tenant_code = #{tenantCode}
+           AND s.is_deleted = FALSE
+           AND s.intent IS NOT NULL AND s.intent &lt;&gt; ''
+           AND s.start_time &gt;= #{dayStart}
+           AND s.start_time &lt; #{now}
+         GROUP BY 1
+         ORDER BY cnt DESC
+         LIMIT 6
+    </select>
+    <select id="selectEmotionDistribution" resultType="java.util.Map">
+        SELECT COALESCE(s.emotion, '中性') AS name, COUNT(1) AS cnt
+          FROM session s
+         WHERE s.tenant_code = #{tenantCode}
+           AND s.is_deleted = FALSE
+           AND s.start_time &gt;= #{dayStart}
+           AND s.start_time &lt; #{now}
+         GROUP BY 1
+         ORDER BY cnt DESC
+    </select>
+    <select id="selectTodayAgentRanking" resultType="java.util.Map">
+        WITH today AS (
+            SELECT s.id, s.agent_id, s.csat_score
+              FROM session s
+             WHERE s.tenant_code = #{tenantCode}
+               AND s.is_deleted = FALSE
+               AND s.agent_id IS NOT NULL
+               AND s.start_time &gt;= #{dayStart}
+               AND s.start_time &lt; #{now}
+        ),
+        msg AS (
+            SELECT m.session_id,
+                   COUNT(1) FILTER (WHERE m.sender_type = 2) AS agent_msgs
+              FROM session_message m
+             WHERE m.tenant_code = #{tenantCode}
+               AND m.is_deleted = FALSE
+               AND m.send_time &gt;= #{dayStart}
+             GROUP BY m.session_id
+        ),
+        resp AS (
+            SELECT m.session_id,
+                   AVG(EXTRACT(EPOCH FROM (m.send_time - prev.customer_at))) AS avg_seconds
+              FROM session_message m
+              JOIN LATERAL (
+                    SELECT MAX(c.send_time) AS customer_at
+                      FROM session_message c
+                     WHERE c.tenant_code = m.tenant_code
+                       AND c.session_id = m.session_id
+                       AND c.sender_type = 1
+                       AND c.is_deleted = FALSE
+                       AND c.send_time &lt; m.send_time
+                   ) prev ON TRUE
+             WHERE m.tenant_code = #{tenantCode}
+               AND m.is_deleted = FALSE
+               AND m.sender_type = 2
+               AND prev.customer_at IS NOT NULL
+             GROUP BY m.session_id
+        )
+        SELECT t.agent_id                                                      AS agent_id,
+               COUNT(1)                                                        AS session_count,
+               COALESCE(SUM(msg.agent_msgs), 0)                                AS message_count,
+               COALESCE(ROUND(AVG(resp.avg_seconds))::INT, 0)                  AS avg_response_seconds,
+               ROUND(AVG(t.csat_score)::numeric, 2)                            AS csat_score
+          FROM today t
+          LEFT JOIN msg ON msg.session_id = t.id
+          LEFT JOIN resp ON resp.session_id = t.id
+         GROUP BY t.agent_id
+         ORDER BY session_count DESC, agent_id
+         LIMIT #{limit}
+    </select>
+    <!-- 坐席绩效下钻：这个坐席在时间范围内的会话明细（点进去能回工作台看上下文） -->
+    <select id="selectAgentSessionsForReport" resultType="java.util.Map">
+        SELECT s.session_no      AS session_no,
+               s.status          AS status,
+               s.source          AS source,
+               s.intent          AS intent,
+               s.emotion         AS emotion,
+               s.csat_score      AS csat_score,
+               s.start_time      AS start_time,
+               s.end_time        AS end_time,
+               c.name            AS customer_name,
+               COALESCE(mc.msg_count, 0) AS msg_count
+          FROM session s
+          LEFT JOIN customer c ON c.id = s.customer_id
+          LEFT JOIN LATERAL (
+                SELECT COUNT(1) AS msg_count
+                  FROM session_message m
+                 WHERE m.tenant_code = s.tenant_code
+                   AND m.session_id = s.id
+                   AND m.is_deleted = FALSE
+               ) mc ON TRUE
+         WHERE s.tenant_code = #{tenantCode}
+           AND s.is_deleted = FALSE
+           AND s.start_time &gt;= #{from}
+           AND s.start_time &lt; #{to}
+           <choose>
+               <when test="agentId != null">
+                   AND s.agent_id = #{agentId}
+               </when>
+               <otherwise>
+                   AND s.agent_id IS NULL
+               </otherwise>
+           </choose>
+         ORDER BY s.start_time DESC, s.id DESC
+         LIMIT #{limit}
+    </select>
+    <!-- 有会话的租户：绩效定时重算按租户逐个跑 -->
+    <select id="selectTenantsForMetrics" resultType="java.lang.String">
+        SELECT DISTINCT tenant_code
+          FROM session
+         WHERE is_deleted = FALSE
+    </select>
+    <!-- 大屏「坐席实时状态」：状态取自 agent_status，今日服务量与满意度取自今天的会话 -->
+    <select id="selectAgentLive" resultType="java.util.Map">
+        WITH workload AS (
+            SELECT s.agent_id, COUNT(1) AS active_count
+              FROM session s
+             WHERE s.tenant_code = #{tenantCode}
+               AND s.is_deleted = FALSE
+               AND s.agent_id IS NOT NULL
+               AND s.status IN (2, 3)
+             GROUP BY s.agent_id
+        ),
+        today AS (
+            SELECT s.agent_id,
+                   COUNT(1)                             AS session_count,
+                   ROUND(AVG(s.csat_score)::numeric, 2) AS csat_score
+              FROM session s
+             WHERE s.tenant_code = #{tenantCode}
+               AND s.is_deleted = FALSE
+               AND s.agent_id IS NOT NULL
+               AND s.start_time &gt;= #{dayStart}
+               AND s.start_time &lt; #{now}
+             GROUP BY s.agent_id
+        ),
+        -- 有人今天接待过、却没有状态行（比如刚入职没登录过长连接）：也要出现在卡片里，
+        -- 否则会出现"明明有人接单，坐席实时状态却是空的"
+        agents AS (
+            SELECT a.agent_id AS agent_id, a.status AS status, a.is_connected AS is_connected
+              FROM agent_status a
+             WHERE a.tenant_code = #{tenantCode}
+               AND a.is_deleted = FALSE
+            UNION
+            SELECT t.agent_id, 0 AS status, FALSE AS is_connected
+              FROM today t
+             WHERE NOT EXISTS (
+                   SELECT 1
+                     FROM agent_status a2
+                    WHERE a2.tenant_code = #{tenantCode}
+                      AND a2.is_deleted = FALSE
+                      AND a2.agent_id = t.agent_id)
+        )
+        SELECT ag.agent_id                  AS agent_id,
+               ag.status                    AS status,
+               ag.is_connected              AS is_connected,
+               COALESCE(w.active_count, 0)  AS active_count,
+               COALESCE(t.session_count, 0) AS session_count,
+               t.csat_score                 AS csat_score
+          FROM agents ag
+          LEFT JOIN workload w ON w.agent_id = ag.agent_id
+          LEFT JOIN today t ON t.agent_id = ag.agent_id
+         ORDER BY COALESCE(t.session_count, 0) DESC, ag.agent_id
+         LIMIT #{limit}
+    </select>
+    <!--
+      大屏「实时动态」：把今天发生的 会话发起 / 转人工 / 客户评价 / 新建工单 / 质检预警
+      合成一条事件流。数据全部来自本系统自身的业务表，不引外部埋点。
+    -->
+    <select id="selectRecentActivity" resultType="java.util.Map">
+        SELECT kind, event_time, event_text
+          FROM (
+                SELECT 'session' AS kind,
+                       s.start_time AS event_time,
+                       COALESCE(NULLIF(c.name, ''), '访客') || ' 通过 ' ||
+                       COALESCE(NULLIF(ch.name, ''), NULLIF(s.source, ''), '在线渠道') || ' 发起会话' AS event_text
+                  FROM session s
+                  LEFT JOIN customer c ON c.id = s.customer_id
+                  LEFT JOIN channel ch ON ch.id = s.channel_id
+                 WHERE s.tenant_code = #{tenantCode}
+                   AND s.is_deleted = FALSE
+                   AND s.start_time &gt;= #{dayStart}
+                   AND s.start_time &lt; #{now}
+                UNION ALL
+                SELECT 'transfer' AS kind,
+                       e.event_time AS event_time,
+                       COALESCE(NULLIF(c.name, ''), '访客') || ' 会话转人工' AS event_text
+                  FROM session_event e
+                  JOIN session s ON s.id = e.session_id
+                  LEFT JOIN customer c ON c.id = s.customer_id
+                 WHERE e.tenant_code = #{tenantCode}
+                   AND e.event_type = 6
+                   AND e.event_time &gt;= #{dayStart}
+                   AND e.event_time &lt; #{now}
+                UNION ALL
+                SELECT 'csat' AS kind,
+                       cr.evaluate_time AS event_time,
+                       COALESCE(NULLIF(c.name, ''), '访客') || ' 评价 ' || cr.score || ' 星' AS event_text
+                  FROM csat_record cr
+                  JOIN session s ON s.id = cr.session_id
+                  LEFT JOIN customer c ON c.id = s.customer_id
+                 WHERE cr.tenant_code = #{tenantCode}
+                   AND cr.is_deleted = FALSE
+                   AND cr.evaluate_time &gt;= #{dayStart}
+                   AND cr.evaluate_time &lt; #{now}
+                UNION ALL
+                SELECT 'ticket' AS kind,
+                       t.create_time AS event_time,
+                       '新工单 ' || t.ticket_no || '：' || t.title AS event_text
+                  FROM ticket t
+                 WHERE t.tenant_code = #{tenantCode}
+                   AND t.is_deleted = FALSE
+                   AND t.ticket_type = 1
+                   AND t.create_time &gt;= #{dayStart}
+                   AND t.create_time &lt; #{now}
+                UNION ALL
+                SELECT 'alert' AS kind,
+                       a.create_time AS event_time,
+                       '实时质检预警：' || a.rule_name AS event_text
+                  FROM qa_alert a
+                 WHERE a.tenant_code = #{tenantCode}
+                   AND a.is_deleted = FALSE
+                   AND a.create_time &gt;= #{dayStart}
+                   AND a.create_time &lt; #{now}
+          ) feed
+         ORDER BY event_time DESC
+         LIMIT #{limit}
+    </select>
 </mapper>

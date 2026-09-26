@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.customer.mapper.AgentDailyMetricMapper">
+
+    <!--
+      重算某一天的坐席绩效：一条 SQL 把四个指标来源合成一行（坐席 × 天），再 upsert。
+
+      三处口径说明（都在报表页脚注里写清楚了）：
+        · 首次响应 = 客户最后一条消息 → 坐席第一条消息（内部备注不算"响应"，客户看不到）；
+        · 平均响应 = 坐席每条消息距"客户上一条消息"的间隔（LATERAL 取上一条客户消息）；
+        · 会话时长 = start_time → end_time（未结束的会话按 now() 算，所以白天的数字会继续涨）。
+
+      坐席姓名**不在 SQL 里取**：sys_user 在另一个库（user_db），跨库 join 不了——
+      读取时由 UserNameClient 调 user-service 的内部接口批量换名字（见 MetricsService）。
+    -->
+    <insert id="rebuildDaily">
+        WITH base AS (
+            SELECT s.id,
+                   s.tenant_code,
+                   s.agent_id,
+                   s.start_time,
+                   s.end_time,
+                   s.status,
+                   s.csat_score
+              FROM session s
+             WHERE s.tenant_code = #{tenantCode}
+               AND s.is_deleted = FALSE
+               AND s.start_time &gt;= #{from}
+               AND s.start_time &lt; #{to}
+        ),
+        msg AS (
+            SELECT m.session_id,
+                   COUNT(1) FILTER (WHERE m.sender_type = 2) AS agent_msgs,
+                   COUNT(1) FILTER (WHERE m.sender_type = 1) AS customer_msgs
+              FROM session_message m
+             WHERE m.tenant_code = #{tenantCode}
+               AND m.is_deleted = FALSE
+               AND m.send_time &gt;= #{from}
+               AND m.send_time &lt; #{to}
+             GROUP BY m.session_id
+        ),
+        first_agent AS (
+            SELECT m.session_id, MIN(m.send_time) AS first_at
+              FROM session_message m
+             WHERE m.tenant_code = #{tenantCode}
+               AND m.is_deleted = FALSE
+               AND m.sender_type = 2
+               AND m.visible_to = 1
+             GROUP BY m.session_id
+        ),
+        last_customer AS (
+            SELECT m.session_id, MAX(m.send_time) AS last_at
+              FROM session_message m
+             WHERE m.tenant_code = #{tenantCode}
+               AND m.is_deleted = FALSE
+               AND m.sender_type = 1
+             GROUP BY m.session_id
+        ),
+        -- 坐席每条消息的"响应间隔"：距它前面最近的一条客户消息
+        resp AS (
+            SELECT m.session_id, AVG(EXTRACT(EPOCH FROM (m.send_time - prev.customer_at))) AS avg_seconds
+              FROM session_message m
+              JOIN LATERAL (
+                    SELECT MAX(c.send_time) AS customer_at
+                      FROM session_message c
+                     WHERE c.tenant_code = m.tenant_code
+                       AND c.session_id = m.session_id
+                       AND c.sender_type = 1
+                       AND c.is_deleted = FALSE
+                       AND c.send_time &lt; m.send_time
+                   ) prev ON TRUE
+             WHERE m.tenant_code = #{tenantCode}
+               AND m.is_deleted = FALSE
+               AND m.sender_type = 2
+               AND prev.customer_at IS NOT NULL
+             GROUP BY m.session_id
+        ),
+        transfer AS (
+            SELECT e.session_id, COUNT(1) AS cnt
+              FROM session_event e
+             WHERE e.tenant_code = #{tenantCode}
+               AND e.event_type = 1
+             GROUP BY e.session_id
+        )
+        INSERT INTO agent_daily_metric
+            (id, tenant_code, agent_id, agent_name, stat_date,
+             session_count, human_session_count, message_count, customer_message_count,
+             first_response_seconds, avg_response_seconds, avg_session_seconds,
+             transfer_count, csat_count, csat_score, good_csat_count, close_count,
+             create_time, update_time)
+        SELECT
+            -- 主键：坐席 + 租户 + 日期 的 64 位哈希。
+            -- 为什么不用"agent_id 乘个系数再加日期"：雪花 ID 本身就是 19 位，乘完直接 bigint out of range
+            -- （踩过）。哈希同样稳定（重算同一 坐席×天 命中同一主键），又不会溢出。
+            hashtextextended(#{tenantCode} || ':' || COALESCE(b.agent_id, 0)::text || ':' || #{statDate}, 0) AS id,
+            #{tenantCode},
+            -- 未分配 / 机器人接待统一落 0：UNIQUE 约束对 NULL 不生效，留 NULL 会重复插行
+            COALESCE(b.agent_id, 0) AS agent_id,
+            NULL AS agent_name,
+            #{statDate},
+            COUNT(1) AS session_count,
+            COUNT(1) FILTER (WHERE b.agent_id IS NOT NULL) AS human_session_count,
+            COALESCE(SUM(msg.agent_msgs), 0) AS message_count,
+            COALESCE(SUM(msg.customer_msgs), 0) AS customer_message_count,
+            COALESCE(ROUND(AVG(EXTRACT(EPOCH FROM (fa.first_at - lc.last_at))))::INT, 0) AS first_response_seconds,
+            COALESCE(ROUND(AVG(resp.avg_seconds))::INT, 0) AS avg_response_seconds,
+            COALESCE(ROUND(AVG(EXTRACT(EPOCH FROM (COALESCE(b.end_time, now()) - b.start_time))))::INT, 0)
+                AS avg_session_seconds,
+            COALESCE(SUM(tr.cnt), 0) AS transfer_count,
+            COUNT(b.csat_score) AS csat_count,
+            ROUND(AVG(b.csat_score)::numeric, 2) AS csat_score,
+            COUNT(b.csat_score) FILTER (WHERE b.csat_score &gt;= 4) AS good_csat_count,
+            COUNT(1) FILTER (WHERE b.status = 4) AS close_count,
+            now(), now()
+          FROM base b
+          LEFT JOIN msg ON msg.session_id = b.id
+          LEFT JOIN first_agent fa ON fa.session_id = b.id
+          LEFT JOIN last_customer lc ON lc.session_id = b.id
+          LEFT JOIN resp ON resp.session_id = b.id
+          LEFT JOIN transfer tr ON tr.session_id = b.id
+         GROUP BY COALESCE(b.agent_id, 0)
+        ON CONFLICT (tenant_code, agent_id, stat_date) DO UPDATE SET
+            session_count = EXCLUDED.session_count,
+            human_session_count = EXCLUDED.human_session_count,
+            message_count = EXCLUDED.message_count,
+            customer_message_count = EXCLUDED.customer_message_count,
+            first_response_seconds = EXCLUDED.first_response_seconds,
+            avg_response_seconds = EXCLUDED.avg_response_seconds,
+            avg_session_seconds = EXCLUDED.avg_session_seconds,
+            transfer_count = EXCLUDED.transfer_count,
+            csat_count = EXCLUDED.csat_count,
+            csat_score = EXCLUDED.csat_score,
+            good_csat_count = EXCLUDED.good_csat_count,
+            close_count = EXCLUDED.close_count,
+            update_time = now()
+    </insert>
+    <sql id="reportColumns">
+        COALESCE(m.agent_id, 0) AS agent_id,
+        COALESCE(MAX(m.agent_name), '未分配 / 机器人接待') AS agent_name,
+        SUM(m.session_count) AS session_count,
+        SUM(m.human_session_count) AS human_session_count,
+        SUM(m.message_count) AS message_count,
+        SUM(m.customer_message_count) AS customer_message_count,
+        ROUND(AVG(NULLIF(m.first_response_seconds, 0)))::INT AS first_response_seconds,
+        ROUND(AVG(NULLIF(m.avg_response_seconds, 0)))::INT AS avg_response_seconds,
+        ROUND(AVG(NULLIF(m.avg_session_seconds, 0)))::INT AS avg_session_seconds,
+        SUM(m.transfer_count) AS transfer_count,
+        SUM(m.csat_count) AS csat_count,
+        ROUND(AVG(m.csat_score)::numeric, 2) AS csat_score,
+        SUM(m.good_csat_count) AS good_csat_count,
+        SUM(m.close_count) AS close_count,
+        COUNT(DISTINCT m.stat_date) AS active_days
+    </sql>
+    <!-- 绩效报表：按坐席聚合 + 排序 + 分页（排序字段走白名单，拼不进注入） -->
+    <select id="selectAgentReport" resultType="java.util.Map">
+        SELECT <include refid="reportColumns"/>
+          FROM agent_daily_metric m
+         WHERE m.tenant_code = #{tenantCode}
+           AND m.stat_date &gt;= #{from}
+           AND m.stat_date &lt;= #{to}
+           <if test="agentId != null">
+           AND m.agent_id = #{agentId}
+           </if>
+         GROUP BY COALESCE(m.agent_id, 0)
+         ORDER BY ${orderBy} DESC NULLS LAST, agent_id
+         LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="countAgentReport" resultType="long">
+        SELECT COUNT(DISTINCT COALESCE(m.agent_id, 0))
+          FROM agent_daily_metric m
+         WHERE m.tenant_code = #{tenantCode}
+           AND m.stat_date &gt;= #{from}
+           AND m.stat_date &lt;= #{to}
+           <if test="agentId != null">
+           AND m.agent_id = #{agentId}
+           </if>
+    </select>
+    <!-- 单个坐席的按天趋势（下钻抽屉里的折线） -->
+    <select id="selectAgentTrend" resultType="java.util.Map">
+        SELECT m.stat_date AS stat_date,
+               SUM(m.session_count) AS session_count,
+               SUM(m.message_count) AS message_count,
+               ROUND(AVG(NULLIF(m.first_response_seconds, 0)))::INT AS first_response_seconds,
+               ROUND(AVG(m.csat_score)::numeric, 2) AS csat_score
+          FROM agent_daily_metric m
+         WHERE m.tenant_code = #{tenantCode}
+           AND COALESCE(m.agent_id, 0) = COALESCE(#{agentId}, 0)
+           AND m.stat_date &gt;= #{from}
+           AND m.stat_date &lt;= #{to}
+         GROUP BY m.stat_date
+         ORDER BY m.stat_date
+    </select>
+    <!-- 租户级按天趋势（大屏的近 14 天） -->
+    <select id="selectTenantTrend" resultType="java.util.Map">
+        SELECT m.stat_date AS stat_date,
+               SUM(m.session_count) AS session_count,
+               -- 机器人接待 = 当天总接待 - 人工接手过的（与今日口径一致）
+               SUM(m.session_count - m.human_session_count) AS bot_count,
+               SUM(m.message_count) AS message_count,
+               SUM(m.csat_count) AS csat_count,
+               SUM(m.good_csat_count) AS good_csat_count,
+               ROUND(AVG(m.csat_score)::numeric, 2) AS csat_score,
+               ROUND(AVG(NULLIF(m.first_response_seconds, 0)))::INT AS first_response_seconds
+          FROM agent_daily_metric m
+         WHERE m.tenant_code = #{tenantCode}
+           AND m.stat_date &gt;= #{from}
+           AND m.stat_date &lt;= #{to}
+         GROUP BY m.stat_date
+         ORDER BY m.stat_date
+    </select>
+</mapper>

@@ -33,7 +33,6 @@ function handleUnauthorized(message?: string) {
       clearToken()
       localStorage.removeItem('yunti_admin_tenant')
       localStorage.removeItem('yunti_onboard_done')
-      localStorage.removeItem('yunti_onboard_guide_hidden')
       window.location.href = '/login'
     })
 }

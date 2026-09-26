@@ -27,6 +27,7 @@ SCRIPTS=(
   customer_db_bot_brain.sql
   customer_db_chat_image.sql
   customer_db_ticket.sql
+  customer_db_metrics.sql
 )
 
 echo "目标库：${PGUSER}@${PGHOST}:${PGPORT}/${DB}"
