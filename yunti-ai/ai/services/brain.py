@@ -148,10 +148,15 @@ def bump_intent_hit(tenant_code: str, intent_code: str | None, confidence: float
         with connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
+                -- 参数要显式 ::numeric：psycopg 把 Python 的 float 当 double precision 传，
+                -- 而 PostgreSQL 只有 round(numeric, int)，没有 round(double precision, int)。
+                -- 不转的话这里会报：function round(double precision, int) does not exist，
+                -- 而且因为它被下面的 try 兜住，只留一行 WARN——"意图命中次数一直不涨"就是这么来的。
                 UPDATE bot_intent
                    SET hit_count = hit_count + 1,
-                       confidence = ROUND(((COALESCE(confidence, %s) * hit_count) + %s)
-                                          / (hit_count + 1), 2),
+                       confidence = ROUND(
+                           ((COALESCE(confidence, %s::numeric) * hit_count) + %s::numeric)
+                           / (hit_count + 1), 2),
                        update_time = CURRENT_TIMESTAMP
                  WHERE tenant_code = %s AND intent_code = %s AND is_deleted = FALSE
                 """,

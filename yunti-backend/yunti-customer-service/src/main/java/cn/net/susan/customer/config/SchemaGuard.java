@@ -53,7 +53,8 @@ public class SchemaGuard implements ApplicationRunner {
             "customer_db_qa_source.sql",
             "customer_db_qa_timeout.sql",
             "customer_db_kb.sql",
-            "customer_db_bot_brain.sql"
+            "customer_db_bot_brain.sql",
+            "customer_db_chat_image.sql"
     );
 
     /** 代码依赖的表 → 来源脚本 */
@@ -75,6 +76,22 @@ public class SchemaGuard implements ApplicationRunner {
      * 而 docx 的标准 MIME 有 71 个字符，上传 Word 必报 value too long。</p>
      */
     private static final Map<String, Integer> REQUIRED_MIN_LENGTH = new LinkedHashMap<>();
+
+    /**
+     * 必需约束取值：约束名 → (必须出现的字面量, 来源脚本, 说明)。
+     *
+     * <p>列都在、宽度也够，插入仍然可能被 CHECK 挡下来——
+     * 聊天图片的 `file_meta.biz_type=5` 就是这么被 `biz_type IN (1,2,3,4)` 拦住的，
+     * 报错发生在插入那一刻，离"少跑一个脚本"隔着好几层调用栈。
+     * 启动时拿约束文本比一下，就能在启动日志里说清楚。</p>
+     *
+     * <p>Postgres 会把 `IN (1,2,3,4)` 规范化成 `= ANY (ARRAY['1'::smallint, ...])`，
+     * 所以这里比的是带引号的字面量。</p>
+     */
+    private static final Map<String, ConstraintRule> REQUIRED_CONSTRAINTS = new LinkedHashMap<>();
+
+    private record ConstraintRule(String literal, String script, String note) {
+    }
 
     static {
         REQUIRED_TABLES.put("agent_status", "customer_db_routing.sql");
@@ -102,6 +119,11 @@ public class SchemaGuard implements ApplicationRunner {
         REQUIRED_COLUMNS.put("session.bot_transfer_reason", "customer_db_bot_brain.sql");
 
         REQUIRED_MIN_LENGTH.put("file_meta.mime_type", 128);
+
+        // 聊天图片要写进 file_meta，biz_type=5 必须在允许列表里
+        REQUIRED_CONSTRAINTS.put("ck_file_meta_biz_type",
+                new ConstraintRule("5", "customer_db_chat_image.sql",
+                        "file_meta.biz_type 允许 5-聊天图片"));
     }
 
     private final SchemaMapper schemaMapper;
@@ -161,6 +183,7 @@ public class SchemaGuard implements ApplicationRunner {
     private void checkAndRepair() {
         Map<String, List<String>> missing = missingObjects();
         missing.putAll(missingLengths());
+        missing.putAll(missingConstraints());
         if (missing.isEmpty()) {
             log.info("启动自检通过：customer_db 的表与列都齐全");
             return;
@@ -188,6 +211,7 @@ public class SchemaGuard implements ApplicationRunner {
 
         Map<String, List<String>> stillMissing = missingObjects();
         stillMissing.putAll(missingLengths());
+        stillMissing.putAll(missingConstraints());
         if (stillMissing.isEmpty()) {
             log.info("已自动补齐数据库结构（执行的脚本：{}）", String.join("、", missing.keySet()));
             return;
@@ -212,6 +236,40 @@ public class SchemaGuard implements ApplicationRunner {
                 result.computeIfAbsent(SCRIPT_OF_LENGTH.getOrDefault(entry.getKey(), "customer_db_kb.sql"),
                                 key -> new ArrayList<>())
                         .add("列 " + entry.getKey() + " 宽度 " + actual + " < " + entry.getValue());
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 约束取值检查：约束在、但没放开我们要用的取值 → 照样要跑脚本。
+     *
+     * <p>查不到约束（比如表还没建）不算问题：那种情况上面的"缺表"检查会先报出来。</p>
+     */
+    private Map<String, List<String>> missingConstraints() {
+        if (REQUIRED_CONSTRAINTS.isEmpty()) {
+            return new LinkedHashMap<>();
+        }
+        Map<String, String> definitions = new HashMap<>();
+        try {
+            for (Map<String, Object> row : schemaMapper.selectConstraintDefs()) {
+                String name = row.get("constraint_name") == null ? null : String.valueOf(row.get("constraint_name"));
+                if (name != null) {
+                    definitions.put(name, row.get("definition") == null ? "" : String.valueOf(row.get("definition")));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("读取约束定义失败，跳过约束自检：{}", e.getMessage());
+            return new LinkedHashMap<>();
+        }
+        Map<String, List<String>> result = new LinkedHashMap<>();
+        for (Map.Entry<String, ConstraintRule> entry : REQUIRED_CONSTRAINTS.entrySet()) {
+            String definition = definitions.get(entry.getKey());
+            if (definition == null || !java.util.regex.Pattern.compile(
+                    "(?<!\\d)" + java.util.regex.Pattern.quote(entry.getValue().literal()) + "(?!\\d)")
+                    .matcher(definition).find()) {
+                result.computeIfAbsent(entry.getValue().script(), key -> new ArrayList<>())
+                        .add(entry.getValue().note());
             }
         }
         return result;

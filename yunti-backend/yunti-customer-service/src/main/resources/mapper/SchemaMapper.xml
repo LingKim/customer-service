@@ -17,4 +17,14 @@
          WHERE table_schema = current_schema()
            AND character_maximum_length IS NOT NULL
     </select>
+    <!-- CHECK 约束的定义文本：自检据此判断"这个取值放开了没有" -->
+    <select id="selectConstraintDefs" resultType="java.util.Map">
+        SELECT c.conname                  AS constraint_name,
+               pg_get_constraintdef(c.oid) AS definition
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+         WHERE n.nspname = current_schema()
+           AND c.contype = 'c'
+    </select>
 </mapper>

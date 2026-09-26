@@ -44,9 +44,28 @@
 
               <div class="v-main">
                 <div v-if="msg.senderType !== 1 && senderText(msg)" class="v-meta">{{ senderText(msg) }}</div>
-                <div class="v-bubble" :class="{ 'is-pending': msg.pending, 'is-failed': msg.failed }">
+                <div
+                  class="v-bubble"
+                  :class="{ 'is-pending': msg.pending, 'is-failed': msg.failed, 'is-image': !!imageOf(msg) }"
+                >
+                  <!-- 图片消息：先随图说的那句话，再一排缩略图（最多 3 张），点开在本窗口弹层里看大图 -->
+                  <template v-if="imagesOf(msg).length">
+                    <div v-if="imageOf(msg)?.text" class="v-image-text">{{ imageOf(msg)?.text }}</div>
+                    <div class="v-images" :class="{ 'is-multi': imagesOf(msg).length > 1 }">
+                      <button
+                        v-for="(image, index) in imagesOf(msg)"
+                        :key="image.fileId || image.url || index"
+                        type="button"
+                        class="v-image"
+                        :title="image.name || '查看大图'"
+                        @click="openImage(image)"
+                      >
+                        <img :src="image.url" :alt="image.name || '图片'" loading="lazy" />
+                      </button>
+                    </div>
+                  </template>
                   <!-- 卡片消息：正文 + 可点动作（比如"转人工客服"）。点了才转，不替客户做主 -->
-                  <template v-if="cardOf(msg)">
+                  <template v-else-if="cardOf(msg)">
                     <div class="v-content">{{ cardOf(msg)?.text }}</div>
                     <div v-if="cardOf(msg)?.actions?.length" class="v-actions">
                       <el-button
@@ -101,6 +120,29 @@
         </div>
         <!-- 输入区 -->
         <div class="v-input">
+          <!-- 待发送的图片：先选图（这时就上传好），文字和图片一起点"发送"才发出去，最多 3 张 -->
+          <div v-if="pendingImages.length" class="vi-attach">
+            <div v-for="item in pendingImages" :key="item.previewUrl" class="vi-attach-item">
+              <div class="vi-attach-thumb">
+                <img :src="item.previewUrl" :alt="item.name" />
+                <div v-if="!item.uploaded" class="vi-attach-mask">
+                  <el-icon class="is-loading" :size="15"><Loading /></el-icon>
+                </div>
+                <button
+                  class="vi-attach-remove"
+                  type="button"
+                  :title="item.uploaded ? '移除这张图片' : '取消这张图片'"
+                  @click="removePendingImage(item)"
+                >
+                  <el-icon :size="11"><Close /></el-icon>
+                </button>
+              </div>
+              <div class="vi-attach-name">{{ item.name }}</div>
+            </div>
+            <div class="vi-attach-hint">
+              {{ uploading ? '图片上传中…' : attachHint }}
+            </div>
+          </div>
           <el-input
             v-model="draft"
             type="textarea"
@@ -112,13 +154,34 @@
             @keydown.enter.exact.prevent="send"
           />
           <div class="vi-actions">
+            <div class="vi-left">
+              <input
+                ref="fileRef"
+                class="vi-file"
+                type="file"
+                multiple
+                accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
+                @change="onPickImage"
+              />
+              <el-button
+                size="small"
+                :disabled="sessionClosed || !sessionOpened || !canPickMore"
+                :title="canPickMore
+                  ? `发送截图或照片（一条消息最多 ${MAX_IMAGES_PER_MESSAGE} 张）`
+                  : `一条消息最多 ${MAX_IMAGES_PER_MESSAGE} 张图片，先发出去或移除一张`"
+                @click="pickImage"
+              >
+                <el-icon :size="14"><Picture /></el-icon>
+                <span class="vi-btn-text">图片</span>
+              </el-button>
+            </div>
             <span class="vi-tip">{{ connectionTip }}</span>
             <el-button v-if="sessionClosed" @click="restart">重新发起咨询</el-button>
             <el-button
               v-else
               type="primary"
               :loading="sending"
-              :disabled="!sessionOpened"
+              :disabled="!sessionOpened || uploading"
               @click="send"
             >
               发送
@@ -127,14 +190,33 @@
         </div>
       </template>
     </div>
+    <!-- 图片预览：就在这个窗口里弹一层，右上角有关闭（也支持点遮罩、按 Esc 关） -->
+    <el-image-viewer
+      v-if="previewOpen"
+      :url-list="previewUrls"
+      :initial-index="previewIndex"
+      :hide-on-click-modal="true"
+      teleported
+      @close="previewOpen = false"
+    />
   </div>
 </template>
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { CopyDocument, Loading, Service, WarningFilled } from '@element-plus/icons-vue'
+import { Close, CopyDocument, Loading, Picture, Service, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { listSessionMessages, openVisitorSession, type SessionMessageItem } from '../../api/customer/session'
+import {
+  imagesOf,
+  listSessionMessages,
+  messageTextOf,
+  openVisitorSession,
+  parseImageContent,
+  uploadChatImage,
+  type ChatImageItem,
+  type ChatImageUploadResult,
+  type SessionMessageItem,
+} from '../../api/customer/session'
 import { RealtimeClient, type RealtimeMessage, type RealtimeState } from '../../utils/realtime'
 import { copyText } from '../../utils/clipboard'
 import { useChatScroll } from '../../utils/chatScroll'
@@ -234,7 +316,11 @@ const connectionTip = computed(() => {
 
 onMounted(openSession)
 
-onUnmounted(() => client?.close())
+onUnmounted(() => {
+  client?.close()
+  // 待发送图片的本地预览地址要一起释放（objectURL 不释放会一直占着内存）
+  clearPendingImages()
+})
 
 async function openSession() {
   // appId 是正式参数名；key 是早期版本留下的别名，继续兼容老地址
@@ -366,6 +452,8 @@ function handleMessage(message: RealtimeMessage) {
       applySession(message.data)
       if (!wasClosed && sessionClosed.value) {
         ElMessage.info('本次咨询已结束，如需继续可点右下角重新发起')
+        // 会话关了就发不出去了：清掉待发送区，别让客户对着点不动的附件发呆
+        clearPendingImages()
       }
       break
     }
@@ -388,23 +476,88 @@ function handleMessage(message: RealtimeMessage) {
   }
 }
 
+/**
+ * 点"发送"（也走 Enter）。
+ *
+ * <p>大厂客服的图片消息是**一条消息**：客户输入的文字 + 待发送的图片，点发送才一起出去。
+ * 所以这里先看有没有待发送的图片——有就走图片消息（文字挂在 `text` 字段上），
+ * 没有才是纯文本。不替客户做"选完图立刻发出去"的决定。</p>
+ */
 function send() {
   const content = draft.value.trim()
-  if (!content) {
+  const images = pendingImages.value
+  if (images.some((item) => !item.uploaded)) {
+    ElMessage.info('图片还在上传，稍等一下再发送')
     return
   }
+  if (!images.length && !content) {
+    return
+  }
+  if (!readyClient()) {
+    return
+  }
+  if (!images.length) {
+    draft.value = ''
+    void sendText(content)
+    return
+  }
+  // 正文结构和后端约定的一致：第一张放在顶层（老消息/老渲染都认），
+  // 完整清单在 `images` 与 `fileIds` 里；`text` 就是客户打的字（可以是空的）
+  const uploaded = images.map((item) => item.uploaded!)
+  const payload = {
+    fileId: uploaded[0].fileId,
+    url: uploaded[0].url,
+    name: uploaded[0].name,
+    size: uploaded[0].size,
+    fileIds: uploaded.map((item) => item.fileId),
+    images: uploaded.map((item) => ({
+      fileId: item.fileId,
+      url: item.url,
+      name: item.name,
+      size: item.size,
+    })),
+    ...(content ? { text: content } : {}),
+  }
   draft.value = ''
-  void sendText(content)
+  clearPendingImages()
+  void sendPayload(JSON.stringify(payload), 2)
+}
+
+/**
+ * 现在能不能发消息：不能发就提示一句并返回 null，能发就把长连接客户端给你。
+ *
+ * <p>为什么要在"发送前"判一次：连上之前发不出去，而待发送的图片已经上传到对象存储了，
+ * 得留着让客户连上后再点一次，不能悄悄丢掉。</p>
+ */
+function readyClient(): RealtimeClient | null {
+  if (sessionClosed.value) {
+    return null
+  }
+  if (!client || !sessionOpened.value) {
+    ElMessage.warning('正在接入客服，稍等一下再发送')
+    return null
+  }
+  return client
 }
 
 /** 真正发一条消息（卡片上的"转人工客服"也走这里，保证行为完全一致） */
 async function sendText(text: string) {
   const content = text.trim()
-  if (!content || sessionClosed.value) {
+  if (!content) {
     return
   }
-  if (!client || !sessionOpened.value) {
-    ElMessage.warning('正在接入客服，稍等一下再发送')
+  await sendPayload(content, 1)
+}
+
+/**
+ * 真正发一条消息（文本、图片都走这里，保证行为完全一致）。
+ *
+ * @param msgType 1-文本、2-图片（图片的 content 是 `{fileId,url,name,size,text}` 的 JSON，
+ *                `text` 就是客户随图打的那句话——服务端拿它当"客户的问题"用）
+ */
+async function sendPayload(content: string, msgType: number) {
+  const rt = readyClient()
+  if (!rt) {
     return
   }
   // 消息号由页面生成并挂到气泡上：长连接那边不管连没连上都先收进发件箱，
@@ -416,7 +569,7 @@ async function sendText(text: string) {
     msgNo: `local-${clientMsgNo}`,
     clientMsgNo,
     senderType: 1,
-    msgType: 1,
+    msgType,
     content,
     sendTime: new Date().toISOString(),
     pending: true,
@@ -425,10 +578,10 @@ async function sendText(text: string) {
   scrollToBottom(true)
   sending.value = true
   try {
-    const ack = await client.send({
+    const ack = await rt.send({
       type: 'SEND',
       sessionNo: sessionNo.value,
-      msgType: 1,
+      msgType,
       content,
       clientMsgNo,
     })
@@ -445,6 +598,156 @@ async function sendText(text: string) {
   }
 }
 
+/** 图片消息解析（msgType=2 的正文是一段 JSON） */
+function imageOf(message: SessionMessageItem) {
+  return message.msgType === 2 ? parseImageContent(message.content) : null
+}
+
+/**
+ * 图片预览：点缩略图在**本窗口**的弹层里看原图。
+ *
+ * <p>以前是 `<a target="_blank">`，会在浏览器里多开一个标签页——小程序/嵌入式窗口里
+ * 那是直接跳走，客户看完还得自己找回客服窗口。改成弹层后：右上角有关闭、
+ * 点遮罩或按 Esc 也能关；会话里所有图排成一条链，弹层里能左右切换（左下角有 1/6 这样的计数），
+ * 点第几张就从第几张开始看。</p>
+ */
+const previewOpen = ref(false)
+const previewIndex = ref(0)
+const previewUrls = computed(() =>
+  messages.value
+    .flatMap((item) => imagesOf(item).map((image) => image.url))
+    .filter((url): url is string => !!url),
+)
+
+function openImage(image: ChatImageItem) {
+  const url = image?.url
+  if (!url) {
+    return
+  }
+  const index = previewUrls.value.indexOf(url)
+  previewIndex.value = index >= 0 ? index : 0
+  previewOpen.value = true
+}
+
+const fileRef = ref<HTMLInputElement>()
+
+/** 一条消息最多带几张图（和后端、AI 侧的 vision_max_images 对齐，别各写各的） */
+const MAX_IMAGES_PER_MESSAGE = 3
+/** 单张图片大小上限（后端也有一道，前端先拦一下省得白传） */
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+/** 待发送的图片：选了图就先挂在这里，点"发送"才和文字一起变成一条消息 */
+interface PendingImage {
+  name: string
+  size: number
+  /** 本地预览地址（objectURL）：上传中也能立刻看到缩略图，不用等对象存储 */
+  previewUrl: string
+  /** 上传完成后才有（fileId + 对象存储地址）；为 null 表示还在传 */
+  uploaded: ChatImageUploadResult | null
+}
+
+const pendingImages = ref<PendingImage[]>([])
+/** 还有图片在上传：这期间不让发送，否则发出去的会是一条缺图的残缺消息 */
+const uploading = computed(() => pendingImages.value.some((item) => !item.uploaded))
+/** 还能不能再选图（一条消息最多 3 张） */
+const canPickMore = computed(() => pendingImages.value.length < MAX_IMAGES_PER_MESSAGE)
+const attachHint = computed(() => {
+  const left = MAX_IMAGES_PER_MESSAGE - pendingImages.value.length
+  return left > 0
+    ? `已就绪，点“发送”随文字一起发出（还可再选 ${left} 张）`
+    : '已到上限（一条消息最多 3 张），点「发送」发出去'
+})
+
+function pickImage() {
+  if (sessionClosed.value || !sessionOpened.value || !canPickMore.value) {
+    return
+  }
+  fileRef.value?.click()
+}
+
+/** 从待发送区移除这张图：本地预览地址一起释放，别让 objectURL 一直占着内存 */
+function removePendingImage(item: PendingImage) {
+  const index = pendingImages.value.indexOf(item)
+  if (index < 0) {
+    return
+  }
+  URL.revokeObjectURL(item.previewUrl)
+  pendingImages.value.splice(index, 1)
+}
+
+/** 清空待发送区（发送成功、会话结束、离开页面时都要走这里，否则 objectURL 会漏） */
+function clearPendingImages() {
+  pendingImages.value.slice().forEach(removePendingImage)
+}
+
+/**
+ * 选了图（可一次选多张，最多 3 张）：**先上传到对象存储**，然后挂在输入框上方，等客户点"发送"。
+ *
+ * <p>为什么要先传后发：长连接只传小文本帧，图片字节走 HTTP 上传到对象存储，消息里只带
+ * `fileId + url`。大图上传要好几秒，等点"发送"那一刻才开始传，按钮只能一直转圈；
+ * 先传完再发，客户点下去就是"嗖"地出去。断线重发、历史记录也都只是几百字节的 JSON。</p>
+ *
+ * <p>为什么不再"选完图立刻发一条图片消息"：那是替客户做了决定。客户想说的大多是
+ * "这个订单为什么一直失败"配一张截图——图先发出去、文字还在输入框里，服务端会先按
+ * "只有图"接一轮（识别 + 回答），等文字到了再答一次，两轮都对不上上下文。
+ * 改成"文字 + 图片一条消息"，视觉识别和客服大脑拿到的才是完整的那句话。</p>
+ *
+ * <p>多张图怎么发：一次上传接口只收一个文件，所以这里**并行**传（每张各自转圈、各自可移除），
+ * 全部传完点发送时合成**一条**消息——顶层是第一张（兼容老消息），`images` 里是完整清单。
+ * 视觉模型一次最多看 3 张（AI 侧 vision_max_images），所以上限卡在 3，多了就提示先发出去。</p>
+ */
+async function onPickImage(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  input.value = ''
+  if (!files.length) {
+    return
+  }
+  const appKey = String(route.query.appId ?? route.query.key ?? '').trim()
+  if (!appKey) {
+    ElMessage.warning('缺少渠道密钥，无法发送图片')
+    return
+  }
+  const room = MAX_IMAGES_PER_MESSAGE - pendingImages.value.length
+  if (room <= 0) {
+    ElMessage.warning(`一条消息最多 ${MAX_IMAGES_PER_MESSAGE} 张图片，先发出去再选`)
+    return
+  }
+  const picked = files.slice(0, room)
+  if (files.length > room) {
+    ElMessage.warning(`一条消息最多 ${MAX_IMAGES_PER_MESSAGE} 张图片，这次先放前 ${room} 张`)
+  }
+  // 并行上传：三张 200KB 的图比"一张一张来"快得多，而且每张都能单独移除
+  await Promise.all(picked.map((file) => stageImage(file, appKey)))
+}
+
+/** 把一张图挂进待发送区并开始上传（上传完原地补上 fileId / 地址，失败就自己撤掉） */
+async function stageImage(file: File, appKey: string) {
+  if (file.size > MAX_IMAGE_BYTES) {
+    ElMessage.warning(`「${file.name}」超过 8MB，先压缩一下再发`)
+    return
+  }
+  const previewUrl = URL.createObjectURL(file)
+  const item: PendingImage = { name: file.name, size: file.size, previewUrl, uploaded: null }
+  pendingImages.value.push(item)
+  try {
+    const uploaded: ChatImageUploadResult = await uploadChatImage({
+      appKey,
+      sessionNo: sessionNo.value,
+      visitorToken: visitorToken.value,
+      file,
+    })
+    // 上传是异步的：这期间客户可能已经把这张移除了，认"还在不在列表里"，别认变量
+    if (pendingImages.value.includes(item)) {
+      item.uploaded = uploaded
+    }
+  } catch (e) {
+    removePendingImage(item)
+    const reason = e instanceof Error ? e.message : '请重试'
+    ElMessage.error(`「${file.name}」上传失败：${reason}`)
+  }
+}
+
 /**
  * 复制一条消息。
  *
@@ -452,7 +755,8 @@ async function sendText(text: string) {
  * 或者把聊天记录发给同事；允许选中复制是底线，再补一个悬停即用的复制按钮。</p>
  */
 async function copyMessage(message: SessionMessageItem) {
-  const ok = await copyText(message.content || '')
+  // 图片消息的正文是 JSON，复制 JSON 给客户没用——取"随图说的那句话"
+  const ok = await copyText(messageTextOf(message))
   if (ok) {
     ElMessage.success('已复制')
   } else {
@@ -590,7 +894,11 @@ function appendMessage(message: SessionMessageItem | undefined) {
   if (!message) {
     return
   }
-  if (messages.value.some((item) => item.msgId === message.msgId)) {
+  // 同一条消息再次推送：**就地更新**而不是丢弃。
+  // 图片消息就是这样——先到一次（只有图片），识别完服务端会带着"AI 判读"再推一次。
+  const existing = messages.value.findIndex((item) => item.msgId === message.msgId)
+  if (existing >= 0) {
+    messages.value.splice(existing, 1, { ...messages.value[existing], ...message })
     return
   }
   // 断线重发 / ACK 迟到时，服务端回来的这条和本地那条"乐观气泡"是同一个 clientMsgNo：
@@ -972,13 +1280,19 @@ function msgTime(value?: string | null) {
 .vi-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
   margin-top: 10px;
 }
 
 .vi-tip {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   color: #94a3b8;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .v-error {

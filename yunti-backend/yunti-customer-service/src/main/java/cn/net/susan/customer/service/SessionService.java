@@ -16,6 +16,9 @@ import cn.net.susan.customer.mapper.SessionMapper;
 import cn.net.susan.customer.mapper.SessionMessageMapper;
 import cn.net.susan.customer.mapper.SessionEventMapper;
 import cn.net.susan.customer.security.VisitorTokenService;
+import jakarta.annotation.PreDestroy;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,9 +34,13 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 会话与消息：实时通信底座的业务落库方。
@@ -60,6 +67,9 @@ public class SessionService {
     public static final int STATUS_BOT = 2;
     public static final int STATUS_AGENT = 3;
     public static final int STATUS_CLOSED = 4;
+
+    /** 消息类型码：2-图片（客户发的截图/照片，走视觉识别） */
+    public static final int MSG_TYPE_IMAGE = 2;
 
     /** 消息发送方码：1-客户、2-坐席、3-机器人、4-系统 */
     public static final int SENDER_CUSTOMER = 1;
@@ -108,6 +118,27 @@ public class SessionService {
     /** AI 客服大脑：机器人接待一轮（意图 / 情绪 / 回复 / 是否转人工） */
     private final ObjectProvider<BotBrainService> botBrainProvider;
 
+    /** 图片识别：客户发来的图先看懂，再交给大脑回答 */
+    private final ObjectProvider<VisionService> visionServiceProvider;
+
+    private final SessionAttachmentService attachmentService;
+
+    /** 回填识别结论后要通知长连接，让双方不用刷新就能看到"AI 判读" */
+    private final cn.net.susan.customer.internal.RealtimeNotifyClient notifyClient;
+
+    /** 图片消息的正文是 JSON（fileId / url / name + 识别结论），要解析与回填 */
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ExecutorService visionExecutor = Executors.newFixedThreadPool(3, runnable -> {
+        Thread thread = new Thread(runnable, "chat-vision");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    @PreDestroy
+    public void shutdownVisionExecutor() {
+        visionExecutor.shutdown();
+    }
+
     /**
      * "依赖没装配上"这类问题的告警开关：一旦发生，每条消息都会命中同一条分支，
      * 按消息打日志会把日志刷爆；但完全不打又会让"功能悄悄不干活"。
@@ -139,7 +170,10 @@ public class SessionService {
             ObjectProvider<RoutingService> routingProvider,
             ObjectProvider<RealtimeQaService> realtimeQaProvider,
             ObjectProvider<QaService> qaServiceProvider,
-            ObjectProvider<BotBrainService> botBrainProvider
+            ObjectProvider<BotBrainService> botBrainProvider,
+            ObjectProvider<VisionService> visionServiceProvider,
+            SessionAttachmentService attachmentService,
+            cn.net.susan.customer.internal.RealtimeNotifyClient notifyClient
     ) {
         this.sessionMapper = sessionMapper;
         this.sessionMessageMapper = sessionMessageMapper;
@@ -153,6 +187,9 @@ public class SessionService {
         this.realtimeQaProvider = realtimeQaProvider;
         this.qaServiceProvider = qaServiceProvider;
         this.botBrainProvider = botBrainProvider;
+        this.visionServiceProvider = visionServiceProvider;
+        this.attachmentService = attachmentService;
+        this.notifyClient = notifyClient;
     }
 
     /** 是否开启机器人首轮接待（全局开关，租户级开关由 AI 侧的 bot_setting 决定）。 */
@@ -434,6 +471,15 @@ public class SessionService {
         if (Integer.valueOf(STATUS_CLOSED).equals(session.getStatus())) {
             throw new BizException(40301, "会话已结束，无法继续发送消息");
         }
+        if (senderType == SENDER_CUSTOMER && msgType == MSG_TYPE_IMAGE) {
+            List<Long> fileIds = imageFileIds(content);
+            if (fileIds.isEmpty() || fileIds.size() > 3) {
+                throw new BizException(40001, "一条图片消息需要 1 到 3 张图片");
+            }
+            for (Long fileId : fileIds) {
+                attachmentService.verifySessionFile(tenantCode, sessionNo, fileId);
+            }
+        }
         SessionMessage message = buildMessage(
                 tenantCode, session.getId(), senderType, senderId, msgType, content, visibleTo);
         message.setClientMsgNo(normalizedClientMsgNo);
@@ -474,6 +520,12 @@ public class SessionService {
     private void scheduleBotReply(String tenantCode, Session session, SessionMessage message) {
         // 机器人自己的回复（3）和系统提示（4）本来就不该再触发一轮，跳过不用记日志
         if (!Integer.valueOf(SENDER_CUSTOMER).equals(message.getSenderType())) {
+            return;
+        }
+        // 客户发的图片（msgType=2）：先让视觉模型看懂图，再把结论拼成上下文交给大脑。
+        // 顺序不能反——大脑是按"客户说了什么"来判断意图、检索知识的，图里的内容必须先变成文字。
+        if (Integer.valueOf(MSG_TYPE_IMAGE).equals(message.getMsgType())) {
+            scheduleImageUnderstanding(tenantCode, session, message);
             return;
         }
         // 下面两种跳过必须留日志：现象都是"客户发了消息、机器人一声不吭"，
@@ -517,6 +569,201 @@ public class SessionService {
             return;
         }
         task.run();
+    }
+
+    /**
+     * 客户发来图片：异步识别 → 把结论写回这条消息 → 再触发大脑回答。
+     *
+     * <p>三步都在异步线程里做，理由和机器人接待一样：识别要调视觉模型（秒级），
+     * 不能拖住"图片消息发送成功"这条响应。</p>
+     *
+     * <p>写回消息这一步很关键：坐席在工作台看到的就不是一张"光秃秃的图"，
+     * 而是**图片 + AI 判读 + OCR 原文**——客户发的是报错截图时，坐席一眼就知道问题在哪。</p>
+     */
+    private void scheduleImageUnderstanding(String tenantCode, Session session, SessionMessage message) {
+        if (!botReceptionEnabled() || session.getAgentId() != null) {
+            // 人工已经在接待：机器人不插话，但图片识别对坐席同样有用，所以照样识别、照样回填
+            log.info("人工接待中，图片只做识别不回话 tenant={} sessionNo={}", tenantCode, session.getSessionNo());
+        }
+        String sessionNo = session.getSessionNo();
+        Runnable task = () -> {
+            VisionService vision = visionServiceProvider.getIfAvailable();
+            if (vision == null) {
+                return;
+            }
+            // 识别 + 回答算"一个回合"：从这一刻起就给客户亮"正在输入"。
+            // 三张图要下载、压缩、调视觉模型，再交给大脑回答——中间只要熄一次，
+            // 客户看到的就是"图发出去了，没人理"（这正是"响应好慢"的那种体感）。
+            notifyClient.notifyTyping(tenantCode, sessionNo, "BOT", true);
+            // 交给大脑之后由大脑收尾（它自己会亮一次、结束时熄灭），这里就不能再插手，
+            // 否则两边一熄一亮，客户看到的输入提示会闪一下
+            boolean handedOffToBrain = false;
+            try {
+                List<Long> fileIds = imageFileIds(message.getContent());
+                if (fileIds.isEmpty()) {
+                    log.warn("图片消息里没有解析出文件 ID tenant={} sessionNo={} content={}",
+                            tenantCode, sessionNo, preview(message.getContent()));
+                    return;
+                }
+                // 客户随图说的那句话：没写字就是空串，视觉模型只按图判断
+                String caption = imageCaption(message.getContent());
+                VisionService.VisionResult result = vision.recognize(
+                        tenantCode, sessionNo, fileIds, caption);
+                // ① 把识别结论写回图片消息（坐席与质检都读得到），并推一份"更新后的消息"出去
+                MessageVO patched = patchImageMessage(tenantCode, message.getId(), result);
+                if (patched != null) {
+                    notifyClient.notifyMessage(tenantCode, sessionNo, toMessageMap(patched), true);
+                }
+                // ② 再把"图里的内容"当成客户说的话，交给大脑回答
+                if (session.getAgentId() == null) {
+                    BotBrainService brain = botBrainProvider.getIfAvailable();
+                    if (brain != null) {
+                        handedOffToBrain = true;
+                        brain.handleCustomerMessageAsync(tenantCode, sessionNo,
+                                vision.toBrainQuestion(result, caption));
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("图片识别失败 tenant={} sessionNo={} error={}", tenantCode, sessionNo, e.getMessage());
+            } finally {
+                if (!handedOffToBrain) {
+                    // 人工接待中 / 大脑不可用 / 识别失败：这一轮到此为止，提示得收掉
+                    notifyClient.notifyTyping(tenantCode, sessionNo, "BOT", false);
+                }
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    visionExecutor.execute(task);
+                }
+            });
+            return;
+        }
+        visionExecutor.execute(task);
+    }
+
+    /**
+     * 从图片消息的正文里解析文件 ID。
+     *
+     * <p>图片消息的 content 是一段 JSON（前端发过来的）：`{"fileId":"...","url":"...","name":"..."}`。
+     * 解析失败不抛异常，只记日志——一张图发失败不该影响整条会话。</p>
+     */
+    private List<Long> imageFileIds(String content) {
+        if (content == null || content.isBlank()) {
+            return List.of();
+        }
+        // 用有序 Set 去重：前端发多条图的消息时，顶层 fileId 是第一张（兼容老消息），
+        // fileIds 里又是完整清单——不去重的话第一张会被识别两遍
+        Set<Long> ids = new LinkedHashSet<>();
+        try {
+            Map<String, Object> parsed = objectMapper.readValue(content, new TypeReference<>() {
+            });
+            Object single = parsed.get("fileId");
+            if (single != null) {
+                ids.add(Long.parseLong(String.valueOf(single)));
+            }
+            // 一条消息多张图（最多 3 张，前端限制）：清单在这里
+            Object many = parsed.get("fileIds");
+            if (many instanceof List<?> list) {
+                for (Object item : list) {
+                    ids.add(Long.parseLong(String.valueOf(item)));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("解析图片消息正文失败：{}", e.getMessage());
+        }
+        return new ArrayList<>(ids);
+    }
+
+    /**
+     * 从图片消息的正文里取"客户随图说的那句话"。
+     *
+     * <p>正文形如 `{"fileId":"...","url":"...","name":"...","text":"这个订单为什么一直失败"}`。
+     * 客户可能就是不想写字（只发一张截图），所以取不到 `text` 时返回空串，不是错——
+     * 视觉模型只按图判断，大脑那边也就只有图里的内容可用。</p>
+     */
+    String imageCaption(String content) {
+        if (content == null || content.isBlank()) {
+            return "";
+        }
+        try {
+            Map<String, Object> parsed = objectMapper.readValue(content, new TypeReference<>() {
+            });
+            Object text = parsed.get("text");
+            return text == null ? "" : String.valueOf(text).trim();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /**
+     * 图片消息在**对话历史**里的文本（喂给客服大脑的那份）。
+     *
+     * <p>历史里的 `content` 是那段 JSON，直接丢给模型就是让它读 `{"fileId":"22..."}`——
+     * 既浪费 token 又干扰判断。这里换成"客户说的那句话"，没写字就说明只发了图。</p>
+     */
+    String imageHistoryText(String content) {
+        String caption = imageCaption(content);
+        return caption.isEmpty() ? "[客户发来一张图片]" : caption;
+    }
+
+    /** 日志里的单行预览（换行压平 + 截断） */
+    private String inline(String value) {
+        if (value == null || value.isBlank()) {
+            return "（没识别到文字）";
+        }
+        String text = value.replaceAll("\\s+", " ").trim();
+        return text.length() <= 120 ? text : text.substring(0, 120) + "…";
+    }
+
+    /** 消息对象转成"跨服务传的普通 Map"（长连接只认 JSON，不认 record） */
+    private Map<String, Object> toMessageMap(MessageVO message) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("msgId", message.msgId());
+        data.put("msgNo", message.msgNo());
+        data.put("clientMsgNo", message.clientMsgNo());
+        data.put("seq", message.seq());
+        data.put("sessionId", message.sessionId());
+        data.put("senderType", message.senderType());
+        data.put("senderId", message.senderId());
+        data.put("msgType", message.msgType());
+        data.put("content", message.content());
+        data.put("visibleTo", message.visibleTo());
+        data.put("sendTime", message.sendTime());
+        return data;
+    }
+
+    /**
+     * 把识别结论并回图片消息的正文（保留原有的 fileId / url / name）。
+     *
+     * @return 更新后的消息；没更新成功返回 null（调用方据此决定要不要推送）
+     */
+    private MessageVO patchImageMessage(String tenantCode, Long messageId, VisionService.VisionResult result) {
+        SessionMessage current = sessionMessageMapper.selectById(messageId);
+        if (current == null) {
+            return null;
+        }
+        try {
+            Map<String, Object> payload = objectMapper.readValue(
+                    current.getContent() == null ? "{}" : current.getContent(),
+                    new TypeReference<Map<String, Object>>() {
+                    });
+            payload.putAll(result.toMessagePatch());
+            SessionMessage update = new SessionMessage();
+            update.setId(messageId);
+            update.setContent(objectMapper.writeValueAsString(payload));
+            update.setUpdateTime(LocalDateTime.now());
+            sessionMessageMapper.updateById(update);
+            log.info("图片识别结论已回填 tenant={} messageId={} available={} ocrLength={}",
+                    tenantCode, messageId, result.available(), result.ocrText().length());
+            current.setContent(update.getContent());
+            return toMessageVO(current);
+        } catch (Exception e) {
+            log.warn("回填图片识别结论失败 messageId={} error={}", messageId, e.getMessage());
+            return null;
+        }
     }
 
     /**

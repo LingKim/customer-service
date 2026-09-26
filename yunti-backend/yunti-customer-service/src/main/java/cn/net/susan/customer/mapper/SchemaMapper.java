@@ -24,4 +24,13 @@ public interface SchemaMapper {
      * （file_meta.mime_type 就是这么被 Office 文档的 MIME 撑爆的）。</p>
      */
     List<Map<String, Object>> selectColumnLengths();
+
+    /**
+     * 约束定义："约束名" → 定义文本（pg_get_constraintdef 的结果）。
+     *
+     * <p>为什么要检查约束：列都在、宽度也够，插入照样可能被 CHECK 挡下来
+     * （聊天图片的 biz_type=5 就是这么被 file_meta 的约束拦住的）。
+     * 这种问题看代码看不出来，只能拿约束文本比。</p>
+     */
+    List<Map<String, Object>> selectConstraintDefs();
 }

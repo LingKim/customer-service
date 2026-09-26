@@ -77,6 +77,12 @@ class BrainState(TypedDict, total=False):
     steps: list[dict]
 
 
+def _indent_question(question: str, limit: int = 400) -> str:
+    """问题可能带图片上下文（多行），压成一行并截断，日志才不会被刷乱"""
+    text = " / ".join(line.strip() for line in (question or "").splitlines() if line.strip())
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
 def _step(state: BrainState, node: str, detail: str, **extra: Any) -> list[dict]:
     steps = list(state.get("steps") or [])
     steps.append({"node": node, "detail": detail, **extra})
@@ -148,6 +154,11 @@ async def node_recognize(state: BrainState) -> dict:
     logger.info("客服大脑意图 tenant=%s session=%s 意图=%s 置信度=%.2f 来源=%s 槽位=%s",
                 state["tenant_code"], state.get("session_no") or "-",
                 (intent or {}).get("name") or "其他", confidence, source, slots)
+    # 把这一轮真正收到的问题打出来：客户发图片时，这里会看到"[客户发来一张图片] 判读：… 图中文字：…"，
+    # 是"图里的内容有没有进大脑"的直接证据
+    logger.info("客服大脑输入 tenant=%s session=%s 内容=%s",
+                state["tenant_code"], state.get("session_no") or "-",
+                _indent_question(state["question"]))
     return {
         "setting": setting,
         "intents": intents,

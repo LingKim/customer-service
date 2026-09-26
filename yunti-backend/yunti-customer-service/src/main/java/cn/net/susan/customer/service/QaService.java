@@ -249,7 +249,7 @@ public class QaService {
         String transcript = messages.stream()
                 .filter(message -> message.getContent() != null && !message.getContent().isBlank())
                 .map(message -> (Integer.valueOf(1).equals(message.getSenderType()) ? "客户" : "客服")
-                        + "：" + message.getContent())
+                        + "：" + transcriptContent(message))
                 .reduce((a, b) -> a + "\n" + b).orElse("");
         if (transcript.isBlank()) {
             return null;
@@ -920,9 +920,27 @@ public class QaService {
     ) {
     }
 
-    /**
-     * 规则视图。
-     */
+    /** 将图片消息的识别结论提取为质检文本。 */
+    private String transcriptContent(SessionMessage message) {
+        if (!Integer.valueOf(SessionService.MSG_TYPE_IMAGE).equals(message.getMsgType())) {
+            return message.getContent();
+        }
+        try {
+            Map<String, Object> image = JSON.readValue(message.getContent(), new TypeReference<>() {});
+            StringBuilder text = new StringBuilder("[图片]");
+            for (String key : List.of("text", "aiSummary", "aiErrorText", "aiOcrText")) {
+                Object value = image.get(key);
+                if (value != null && !String.valueOf(value).isBlank()) {
+                    text.append(' ').append(String.valueOf(value));
+                }
+            }
+            return text.toString();
+        } catch (Exception ignored) {
+            return "[图片]";
+        }
+    }
+
+    /** 规则视图。 */
     public record RuleVO(
             String id,
             String ruleName,

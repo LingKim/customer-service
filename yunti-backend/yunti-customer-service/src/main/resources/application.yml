@@ -28,6 +28,8 @@ yunti:
     qa-base-url: ${YUNTI_AI_SERVICE_URL:http://127.0.0.1:9100}
     kb-base-url: ${YUNTI_AI_SERVICE_URL:http://127.0.0.1:9100}
     bot-base-url: ${YUNTI_AI_SERVICE_URL:http://127.0.0.1:9100}
+    vision-base-url: ${YUNTI_AI_SERVICE_URL:http://127.0.0.1:9100}
+    vision-timeout-seconds: ${YUNTI_AI_VISION_TIMEOUT_SECONDS:90}
     bot-timeout-seconds: ${YUNTI_AI_BOT_TIMEOUT_SECONDS:60}
     log-payload: ${YUNTI_AI_LOG_PAYLOAD:false}
   bot:
@@ -36,6 +38,8 @@ yunti:
     top-k: ${YUNTI_BOT_TOP_K:5}
   kb:
     auto-reindex: ${YUNTI_KB_AUTO_REINDEX:false}
+  chat:
+    image-max-mb: ${YUNTI_CHAT_IMAGE_MAX_MB:8}
   internal:
     # 两个服务均须配置相同的非空值；未配置时拒绝会话内部接口调用
     shared-secret: ${YUNTI_INTERNAL_SHARED_SECRET:}

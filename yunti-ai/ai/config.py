@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     qwen_api_key: str = ""
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_model: str = "qwen-plus"
+    qwen_vl_model: str = "qwen-vl-plus"
+    vision_max_images: int = 3
+    vision_max_image_mb: int = 6
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_model: str = "deepseek-chat"

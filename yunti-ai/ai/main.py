@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from .api import bot, brain, chat, health, kb, qa, rag
+from .api import bot, brain, chat, health, kb, qa, rag, vision
 from .config import get_settings
 from .core.schema_guard import ensure_schema
 
@@ -23,6 +23,7 @@ def create_app() -> FastAPI:
     app.include_router(kb.router, prefix=settings.api_prefix)
     app.include_router(rag.router, prefix=settings.api_prefix)
     app.include_router(brain.router, prefix=settings.api_prefix)
+    app.include_router(vision.router, prefix=settings.api_prefix)
     return app
 
 app = create_app()

@@ -16,6 +16,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
@@ -151,19 +153,27 @@ public class BotBrainService {
      * <p>由 {@code SessionService} 在消息事务提交后调用，所以这里读到的历史一定包含刚发的那句。</p>
      */
     public void handleCustomerMessageAsync(String tenantCode, String sessionNo) {
+        handleCustomerMessageAsync(tenantCode, sessionNo, null);
+    }
+
+    public void handleCustomerMessageAsync(String tenantCode, String sessionNo, String extraContext) {
         if (!receptionEnabled()) {
             return;
         }
-        executor.execute(() -> handleCustomerMessage(tenantCode, sessionNo));
+        executor.execute(() -> handleCustomerMessage(tenantCode, sessionNo, extraContext));
     }
 
     /** 一轮接待的实际处理（同会话串行）。 */
     void handleCustomerMessage(String tenantCode, String sessionNo) {
+        handleCustomerMessage(tenantCode, sessionNo, null);
+    }
+
+    void handleCustomerMessage(String tenantCode, String sessionNo, String extraContext) {
         String lockKey = tenantCode + '#' + sessionNo;
         Object lock = sessionLocks[Math.floorMod(lockKey.hashCode(), sessionLocks.length)];
         try {
             synchronized (lock) {
-                runOneTurn(tenantCode, sessionNo);
+                runOneTurn(tenantCode, sessionNo, extraContext);
             }
         } catch (Exception e) {
             // 必须在这里兜住：这是线程池里的任务，异常跑出去只会打到 stderr，
@@ -173,10 +183,11 @@ public class BotBrainService {
     }
 
     /** 一轮接待的主体：先确认该不该机器人管，再跑大脑。 */
-    private void runOneTurn(String tenantCode, String sessionNo) {
+    private void runOneTurn(String tenantCode, String sessionNo, String extraContext) {
         SessionService sessions = sessionProvider.getIfAvailable();
         if (sessions == null) {
             log.warn("跳过机器人接待：SessionService 还没就绪 tenant={} sessionNo={}", tenantCode, sessionNo);
+            clearTyping(tenantCode, sessionNo);
             return;
         }
         Session session;
@@ -184,6 +195,7 @@ public class BotBrainService {
             session = sessions.requireSession(tenantCode, sessionNo);
         } catch (BizException e) {
             log.warn("跳过机器人接待：{} tenant={} sessionNo={}", e.getMessage(), tenantCode, sessionNo);
+            clearTyping(tenantCode, sessionNo);
             return;
         }
         String reason = skipReason(session);
@@ -191,17 +203,29 @@ public class BotBrainService {
             // 说清楚"为什么不回"：绝大多数"机器人不回话"的疑问，答案就在这一行
             log.info("机器人不接这一轮：{} tenant={} sessionNo={} status={} agentId={}",
                     reason, tenantCode, sessionNo, session.getStatus(), session.getAgentId());
+            clearTyping(tenantCode, sessionNo);
             return;
         }
         // 先亮"正在输入…"再去想：这一轮要检索 + 调模型，几秒钟里界面必须有反馈，
         // 否则客户会以为消息没发出去（这是"交互不友好"的根子）
         notifyClient.notifyTyping(tenantCode, sessionNo, "BOT", true);
         try {
-            reply(tenantCode, session, sessions);
+            reply(tenantCode, session, sessions, extraContext);
         } finally {
             // 无论成功、失败还是转人工，都要把提示收掉；消息本身也会让前端熄灭它
             notifyClient.notifyTyping(tenantCode, sessionNo, "BOT", false);
         }
+    }
+
+    /**
+     * 收掉"正在输入"。
+     *
+     * <p>为什么跳过的分支也要收：客户发图片时，SessionService 会先亮起输入提示再把这一轮交给大脑
+     * （图片识别要好几秒），如果大脑判断"这轮不归我管"就直接返回，提示会一直挂着，
+     * 客户看到的就是"客服一直在输入、就是不说"。</p>
+     */
+    private void clearTyping(String tenantCode, String sessionNo) {
+        notifyClient.notifyTyping(tenantCode, sessionNo, "BOT", false);
     }
 
     /** 该不该由机器人接；不该接就返回原因（同时用于日志）。 */
@@ -282,9 +306,16 @@ public class BotBrainService {
                     tenantCode, sessionNo, SessionService.SENDER_BOT, null, msgType, content);
             notifyClient.notifyMessage(tenantCode, sessionNo, toMap(saved), true);
         }
-        log.info("机器人接待完成 tenant={} sessionNo={} 意图={} 情绪={} 转人工={} 原因={}",
+        log.info("机器人接待完成 tenant={} sessionNo={} 意图={} 情绪={} 转人工={} 原因={} 图片上下文长度={}",
                 tenantCode, sessionNo, intent, emotion, needHuman,
-                result.get("transfer_reason"));
+                result.get("transfer_reason"), extraContext == null ? 0 : extraContext.length());
+        log.info("机器人回答 tenant={} sessionNo={} 编排={} 引用={}条 回答={}",
+                tenantCode, sessionNo, result.get("engine"),
+                ((List<?>) (result.get("citations") == null ? List.of() : result.get("citations"))).size(),
+                previewOf(reply));
+        // "图片里的内容到底用上了没有"——发图场景最常问的一句话，日志里直接给结论：
+        // 回答里如果出现了图里的订单号/报错原文片段，就说明模型真的读进去了
+        logImageGrounding(tenantCode, sessionNo, extraContext, reply);
         if (needHuman) {
             // 交接话术已经由机器人那条回复说了，这里不再补一句一模一样的系统提示
             escalate(sessions, tenantCode, sessionNo,
@@ -355,6 +386,45 @@ public class BotBrainService {
         }
     }
 
+    /** 日志里的内容预览：换行压平、超长截断 */
+    private String previewOf(String value) {
+        if (value == null || value.isBlank()) {
+            return "-";
+        }
+        String text = value.replaceAll("\\s+", " ").trim();
+        return text.length() <= 120 ? text : text.substring(0, 120) + "…";
+    }
+
+    /**
+     * 判断"回答有没有用上图片里的内容"。
+     *
+     * <p>这不是硬校验，只是给排障的人一个明确信号：客户发的是报错截图时，
+     * 如果回答里出现了图里的订单号或报错原文，那基本可以确定模型读进去了；
+     * 没有任何重合就只能说明"图里的信息没被用上"，需要去看识别结果或提示词。</p>
+     */
+    private void logImageGrounding(String tenantCode, String sessionNo, String extraContext, String reply) {
+        if (extraContext == null || extraContext.isBlank() || reply == null || reply.isBlank()) {
+            return;
+        }
+        List<String> keys = new ArrayList<>();
+        Matcher digits = Pattern.compile("\\d{8,}").matcher(extraContext);
+        while (digits.find()) {
+            keys.add(digits.group());
+        }
+        Matcher quoted = Pattern.compile("[\\u4e00-\\u9fa5]{4,}").matcher(extraContext);
+        while (quoted.find() && keys.size() < 12) {
+            keys.add(quoted.group());
+        }
+        List<String> hit = keys.stream().distinct().filter(reply::contains).limit(3).toList();
+        if (hit.isEmpty()) {
+            log.warn("[图片识别] 回答里没有出现图片中的任何关键信息（订单号/原文片段），"
+                            + "可能没真正用上：tenant={} sessionNo={}", tenantCode, sessionNo);
+            return;
+        }
+        log.info("[图片识别] 回答用上了图片中的信息 tenant={} sessionNo={} 命中数={}",
+                tenantCode, sessionNo, hit.size());
+    }
+
     /** 再查一次会话状态：只有仍然没人接待、且没结束时，机器人才发这条回复。 */
     private boolean stillBotResponsible(String tenantCode, String sessionNo, SessionService sessions) {
         try {
@@ -371,7 +441,7 @@ public class BotBrainService {
      * （"正在为您转接人工客服"这种话喂给模型，只会干扰它对客户诉求的判断）。</p>
      */
     private List<Map<String, String>> buildHistory(String tenantCode, String sessionNo,
-                                                   SessionService sessions) {
+                                                   SessionService sessions, String extraContext) {
         List<SessionService.MessageVO> rows =
                 sessions.historyByTenant(tenantCode, sessionNo, null, MAX_HISTORY, false);
         List<Map<String, String>> messages = new ArrayList<>(rows.size());
@@ -384,8 +454,25 @@ public class BotBrainService {
             if (content == null || content.isBlank()) {
                 continue;
             }
+            // 图片消息的正文是 JSON（fileId + url + 客户随图说的那句话）：
+            // 直接把 JSON 喂给模型，等于让它读 `{"fileId":"22..."}`——既费 token 又干扰判断。
+            // 换成"客户说的那句话"更贴近真实对话，图里的内容由 extraContext 补在后面。
+            if (Integer.valueOf(SessionService.MSG_TYPE_IMAGE).equals(row.msgType())) {
+                content = sessions.imageHistoryText(content);
+            }
             String role = sender == SessionService.SENDER_CUSTOMER ? "user" : "assistant";
             messages.add(BotAiClient.message(role, content));
+        }
+        // 图片识别结论挂在最后一条客户消息上：大脑拿到的还是"客户说的一句话"，
+        // 只是这句话里现在包含了图里的内容——意图识别与知识检索都能正常工作
+        if (extraContext != null && !extraContext.isBlank() && !messages.isEmpty()) {
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                if ("user".equals(messages.get(i).get("role"))) {
+                    messages.get(i).put("content",
+                            messages.get(i).get("content") + "\n" + extraContext.trim());
+                    break;
+                }
+            }
         }
         return messages;
     }

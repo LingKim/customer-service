@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS file_meta (
   editor VARCHAR(64),
   is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
   CONSTRAINT ck_file_meta_size CHECK (file_size >= 0),
-  CONSTRAINT ck_file_meta_biz_type CHECK (biz_type IN (1, 2, 3, 4)),
+  CONSTRAINT ck_file_meta_biz_type CHECK (biz_type IN (1, 2, 3, 4, 5)),
   PRIMARY KEY (id),
   CONSTRAINT uk_tenant_file_no UNIQUE (tenant_code, file_no)
 );

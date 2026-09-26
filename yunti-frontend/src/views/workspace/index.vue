@@ -249,9 +249,61 @@
                     <span v-if="msg.visibleTo === 2" class="note-tag">内部备注</span>
                     <span v-if="riskySeqs.has(Number(msg.seq ?? -1))" class="qa-tag">质检命中</span>
                   </div>
-                  <div class="msg-bubble" :class="{ 'is-pending': msg.pending, 'is-failed': msg.failed }">
+                  <div
+                    class="msg-bubble"
+                    :class="{ 'is-pending': msg.pending, 'is-failed': msg.failed, 'is-image': !!imageOf(msg) }"
+                  >
+                    <!-- 图片消息：缩略图 + AI 判读（坐席一眼知道客户发的什么图、图里写了什么） -->
+                    <template v-if="imagesOf(msg).length">
+                      <!-- 客户随图说的那句话：坐席看图和看文字的顺序，和客户发的时候一致 -->
+                      <div v-if="imageOf(msg)?.text" class="msg-image-text">{{ imageOf(msg)?.text }}</div>
+                      <div class="msg-images" :class="{ 'is-multi': imagesOf(msg).length > 1 }">
+                        <button
+                          v-for="(image, index) in imagesOf(msg)"
+                          :key="image.fileId || image.url || index"
+                          type="button"
+                          class="msg-image"
+                          :title="image.name || '查看大图'"
+                          @click="openImage(image)"
+                        >
+                          <img :src="image.url" :alt="image.name || '图片'" loading="lazy" />
+                        </button>
+                      </div>
+                      <div v-if="imageOf(msg)?.aiSummary" class="msg-ai">
+                        <div class="msg-ai-head">
+                          <el-icon :size="12"><MagicStick /></el-icon>
+                          AI 判读
+                          <span v-if="imageOf(msg)?.aiOrderNo" class="msg-ai-tag">
+                            订单号 {{ imageOf(msg)?.aiOrderNo }}
+                          </span>
+                          <span v-if="imageOf(msg)?.aiAmount" class="msg-ai-tag">
+                            金额 {{ imageOf(msg)?.aiAmount }}
+                          </span>
+                          <!-- 模型判了"这单该找人工"：给坐席一个显眼的标，别靠翻 OCR 原文才发现 -->
+                          <span v-if="imageOf(msg)?.aiNeedHuman" class="msg-ai-tag is-warn">
+                            建议人工介入
+                          </span>
+                        </div>
+                        <div class="msg-ai-text">{{ imageOf(msg)?.aiSummary }}</div>
+                        <div v-if="imageOf(msg)?.aiErrorText" class="msg-ai-error">
+                          报错原文：{{ imageOf(msg)?.aiErrorText }}
+                        </div>
+                        <el-collapse v-if="imageOf(msg)?.aiOcrText" class="msg-ai-ocr">
+                          <el-collapse-item title="查看图中文字（OCR）" :name="msg.msgId">
+                            <pre class="msg-ai-pre">{{ imageOf(msg)?.aiOcrText }}</pre>
+                          </el-collapse-item>
+                        </el-collapse>
+                      </div>
+                      <div v-else-if="imageOf(msg)?.aiAvailable === false" class="msg-ai muted">
+                        图片识别暂不可用（没配视觉模型密钥）
+                      </div>
+                      <div v-else class="msg-ai muted">正在识别图片…</div>
+                    </template>
                     <!-- 卡片消息：正文照常显示；"转人工客服"按钮是给客户点的，坐席这边只做提示 -->
-                    <div class="msg-content">{{ cardOf(msg)?.text ?? msg.content }}</div>
+                    <template v-else-if="cardOf(msg)">
+                      <div class="msg-content">{{ cardOf(msg)?.text }}</div>
+                    </template>
+                    <div v-else class="msg-content">{{ msg.content }}</div>
                     <div v-if="cardOf(msg)?.actions?.length" class="msg-card-note">
                       已向客户提供「{{ cardOf(msg)?.actions?.[0]?.label }}」入口
                     </div>
@@ -385,6 +437,16 @@
       insertable
       @insert="onInsertKnowledge"
     />
+
+    <!-- 图片预览：客户发的截图在**本页**弹层里看大图，右上角有关闭（点遮罩、按 Esc 也能关） -->
+    <el-image-viewer
+      v-if="previewOpen"
+      :url-list="previewUrls"
+      :initial-index="previewIndex"
+      :hide-on-click-modal="true"
+      teleported
+      @close="previewOpen = false"
+    />
   </div>
 </template>
 <script setup lang="ts">
@@ -394,6 +456,7 @@ import {
   Clock,
   CopyDocument,
   Iphone,
+  MagicStick,
   Monitor,
   Promotion,
   Refresh,
@@ -414,8 +477,12 @@ import { openVisitorTestTab } from '../../utils/visitor'
 import {
   fetchSessionWorkload,
   getSessionDetail,
+  imagesOf,
+  messageTextOf,
+  parseImageContent,
   listSessionMessages,
   listSessions,
+  type ChatImageItem,
   type SessionItem,
   type SessionMessageItem,
 } from '../../api/customer/session'
@@ -1221,7 +1288,8 @@ async function send() {
  * 需要带来源的整段记录用右上角的「复制会话」。</p>
  */
 async function copyMessage(msg: SessionMessageItem) {
-  const ok = await copyText(msg.content || '')
+  // 图片消息的正文是 JSON，复制 JSON 没意义——取"随图说的那句话"
+  const ok = await copyText(messageTextOf(msg))
   if (ok) {
     ElMessage.success('已复制这条消息')
   } else {
@@ -1246,7 +1314,7 @@ async function copyConversation() {
     const time = fullTime(msg.sendTime)
     const who = senderText(msg)
     const note = msg.visibleTo === 2 ? '[内部备注] ' : ''
-    return `[${time}] ${who}：${note}${msg.content}`
+    return `[${time}] ${who}：${note}${messageTextOf(msg)}`
   })
   const ok = await copyText([header, ...lines].join('\n'))
   if (ok) {
@@ -1269,6 +1337,34 @@ interface MessageCardAction {
 interface MessageCard {
   text: string
   actions?: MessageCardAction[]
+}
+
+/** 图片消息解析（msgType=2 的正文是 JSON：fileId / url / name + 识别结论） */
+function imageOf(message: SessionMessageItem) {
+  return message.msgType === 2 ? parseImageContent(message.content) : null
+}
+
+/**
+ * 图片预览：点缩略图在**本页**弹层里看原图（原来 `target="_blank"` 会多开一个标签页，
+ * 坐席聊到一半被带走还得找回来）。右上角有关闭，点遮罩、按 Esc 也能关；
+ * 本会话里的图排成一条链，弹层里能左右切换（客户一条消息发 3 张图时，坐席能挨个看）。
+ */
+const previewOpen = ref(false)
+const previewIndex = ref(0)
+const previewUrls = computed(() =>
+  messages.value
+    .flatMap((item) => imagesOf(item).map((image) => image.url))
+    .filter((url): url is string => !!url),
+)
+
+function openImage(image: ChatImageItem) {
+  const url = image?.url
+  if (!url) {
+    return
+  }
+  const index = previewUrls.value.indexOf(url)
+  previewIndex.value = index >= 0 ? index : 0
+  previewOpen.value = true
 }
 
 function cardOf(message: SessionMessageItem): MessageCard | null {
@@ -1343,7 +1439,10 @@ function appendMessage(message: SessionMessageItem | undefined) {
   if (!message) {
     return
   }
-  if (messages.value.some((item) => item.msgId === message.msgId)) {
+  // 同一条消息再次推送就地更新：图片消息识别完会被回填并重推一次（带上 AI 判读与 OCR 原文）
+  const existing = messages.value.findIndex((item) => item.msgId === message.msgId)
+  if (existing >= 0) {
+    messages.value.splice(existing, 1, { ...messages.value[existing], ...message })
     return
   }
   messages.value.push(message)
@@ -1489,6 +1588,20 @@ function agentLabel(agentId?: number | string | null) {
 }
 
 function preview(item: SessionItem) {
+  if (item.lastContent && item.lastContent.trimStart().startsWith('{')) {
+    // 图片/卡片消息的正文是 JSON，直接显示会是一串大括号——列表里统一显示成人话
+    try {
+      const parsed = JSON.parse(item.lastContent) as { url?: string; text?: string }
+      if (parsed?.url) {
+        return item.lastSenderType === 1 ? '[图片] 客户发来一张图片' : '[图片]'
+      }
+      if (parsed?.text) {
+        return parsed.text
+      }
+    } catch {
+      // 解析不了就按普通文本走
+    }
+  }
   if (!item.lastContent) {
     return '暂无消息'
   }
@@ -2591,6 +2704,13 @@ function fullTime(value?: string | null) {
   border-top-right-radius: 4px;
 }
 
+/* 图片消息（文字 + 图）不走蓝色气泡：它是"媒体卡片"，
+   白底 + 深色文字才读得清，下面的"AI 判读"也是照白底设计的 */
+.is-customer .msg-bubble.is-image {
+  background: #fff;
+  border-color: #e8eef6;
+}
+
 .is-note .msg-bubble {
   background: #fff7e6;
   border: 1px dashed #f0b429;
@@ -2630,6 +2750,109 @@ function fullTime(value?: string | null) {
   30% { transform: translateY(-4px); opacity: 1; }
 }
 
+/* 图片消息：缩略图 + AI 判读块 */
+.msg-image img {
+  display: block;
+  max-width: 260px;
+  max-height: 260px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  cursor: zoom-in;
+}
+
+/* 客户一条消息带多张图（最多 3 张）：并排一行，尺寸统一 */
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.msg-images.is-multi .msg-image img {
+  width: 118px;
+  height: 118px;
+  object-fit: cover;
+}
+
+.msg-image {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+
+/* 客户随图说的那句话：显示在图片上方，坐席看图和看文字的顺序和客户发的时候一致 */
+.msg-image-text {
+  display: block;
+  margin-bottom: 6px;
+  color: #1f2937;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg-ai {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e8eef6;
+  font-size: 12px;
+  color: #475569;
+}
+
+.msg-ai.muted {
+  color: #94a3b8;
+}
+
+.msg-ai-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #1d4ed8;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.msg-ai-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 500;
+}
+
+/* "建议人工介入"：暖色，和蓝色信息标区分开 */
+.msg-ai-tag.is-warn {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.msg-ai-text {
+  line-height: 1.6;
+}
+
+.msg-ai-error {
+  margin-top: 4px;
+  color: #b45309;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg-ai-ocr {
+  margin-top: 4px;
+}
+
+.msg-ai-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  color: #475569;
+  max-height: 220px;
+  overflow: auto;
+}
+
 .msg-card-note {
   margin-top: 6px;
   font-size: 11px;
@@ -2642,36 +2865,29 @@ function fullTime(value?: string | null) {
   margin-bottom: 3px;
 }
 
-/* 客户说的话是蓝底，meta 行（客户名）要用浅蓝，别再用默认灰 */
+/* 客户说的话是蓝底、气泡外面是浅色页面：名字用可读的灰，
+   别再用浅蓝（原来那版在浅底上几乎看不见） */
 .is-customer .msg-meta {
-  color: #c7dbff;
+  color: #94a3b8;
 }
 
 /* 时间统一放在消息下方：先看内容，时间只是辅助信息 */
+/* 时间直接显示：坐席要能一眼看出"客户这句是什么时候说的"，别做成悬停才出现 */
 .msg-time {
   margin-top: 4px;
   font-size: 11px;
-  color: #a3aec2;
+  color: #94a3b8;
   text-align: left;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-/* 时间只在需要时出现：悬停这条消息（或触屏）就能看到 */
-.msg-row:hover .msg-time,
-.msg-row:focus-within .msg-time,
-.msg-bubble.is-pending .msg-time,
-.msg-bubble.is-failed .msg-time {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  .msg-time { opacity: 0.75; }
 }
 
 .is-customer .msg-time {
   color: #c7dbff;
   text-align: right;
+}
+
+/* 蓝气泡上的浅蓝时间，放到白底卡片上就看不见了，单独调回来 */
+.is-customer .msg-bubble.is-image .msg-time {
+  color: #94a3b8;
 }
 
 .is-system .msg-time {
