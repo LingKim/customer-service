@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>云梯智能客服 · 企业级 AI 客服平台</title>
+  <meta name="description" content="云梯智能客服：大模型多轮对话、全渠道接入、企业知识库、全量 AI 质检与工单闭环，展示智能客服的产品方向与交互演示。" />
+  <meta name="keywords" content="智能客服,AI客服,在线客服系统,客服机器人,全渠道客服,AI质检,知识库,工单系统" />
+  <meta name="theme-color" content="#2563eb" />
+
+  <meta property="og:title" content="云梯智能客服 · 企业级 AI 客服平台" />
+  <meta property="og:description" content="展示智能客服的产品方向与交互演示。" />
+  <meta property="og:type" content="website" />
+  <!-- 后端 API 前缀：构建时用 YUNTI_API_BASE 覆盖（默认同域 /api，生产由 CDN/网关反代） -->
+  <meta name="yunti-api-base" content="/api" />
+  <link rel="stylesheet" href="assets/css/site.css" />
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "云梯智能客服",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "Web",
+      "description": "智能客服产品与交互演示。"
+    }
+  </script>
+</head>
+<body>
+
+<!-- ── 顶部导航 ───────────────────────────────────────────── -->
+<nav class="nav" id="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#top">
+      <span class="mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </span>
+      <span class="brand-name">云梯智能客服</span>
+    </a>
+    <div class="nav-links">
+      <a href="#features">产品功能</a>
+      <a href="#product">产品演示</a>
+      <a href="#demo">实时体验</a>
+      <a href="#solutions">解决方案</a>
+      <a href="#cases">客户案例</a>
+      <a href="#pricing">定价</a>
+      <a href="#faq">常见问题</a>
+    </div>
+    <div class="nav-cta">
+      <a class="login" href="#" data-app-link="/login">登录</a>
+      <a class="btn btn-primary btn-sm" href="#" data-app-link="/register">注册体验</a>
+    </div>
+  </div>
+</nav>
+<!-- ── 首屏 Hero ──────────────────────────────────────────── -->
+<section class="hero" id="top">
+  <span class="orb o1"></span>
+  <span class="orb o2"></span>
+  <div class="container hero-grid">
+    <div>
+      <span class="badge"><span class="new">NEW</span> <span data-cfg="hero.badge">产品交互展示 · 演示数据</span></span>
+      <h1>
+        <span data-cfg="hero.title1">用 AI 协助处理重复咨询，</span><br />
+        <span class="grad" data-cfg="hero.titleGrad">探索智能客服工作流程</span>
+      </h1>
+      <p class="sub" data-cfg="hero.sub">云梯智能客服产品展示。页面中的工作台与对话是演示，功能与服务开通以实际部署环境为准。</p>
+      <div class="ctas">
+        <a class="btn btn-primary btn-lg" href="#" data-app-link="/register" data-cfg="hero.cta1">注册体验</a>
+        <a class="btn btn-outline btn-lg" href="#demo" data-cfg="hero.cta2">查看产品演示</a>
+      </div>
+      <div class="note" data-cfg="hero.note">页面为产品展示，非服务效果承诺</div>
+      <div class="stats" id="hero-stats"><div><b>交互演示</b><span>固定示例数据</span></div></div>
+    </div>
+    <!-- 产品截图（纯 HTML/CSS 手绘：不依赖任何图片资源，任何 CDN 都不会缺图） -->
+    <div class="hero-mock" aria-hidden="true">
+      <div class="mock-app">
+        <div class="mock-top"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="mock-title">在线客服工作台</span></div>
+        <div class="mock-body">
+          <div class="mock-list">
+            <div class="mock-item"><span class="av" style="background:linear-gradient(135deg,#ec4899,#f43f5e)">刘</span><div><div class="nm">刘雅静</div><div class="pr">微信 · 排队 42s</div></div></div>
+            <div class="mock-item active"><span class="av" style="background:linear-gradient(135deg,#3b82f6,#0ea5e9)">张</span><div><div class="nm">张梦琪</div><div class="pr">App · 接待中</div></div></div>
+            <div class="mock-item"><span class="av" style="background:linear-gradient(135deg,#3b82f6,#06b6d4)">王</span><div><div class="nm">王浩宇</div><div class="pr">网站 · 机器人</div></div></div>
+            <div class="mock-item"><span class="av" style="background:linear-gradient(135deg,#10b981,#34d399)">陈</span><div><div class="nm">陈博文</div><div class="pr">网站 · 排队 3m</div></div></div>
+          </div>
+          <div class="mock-chat">
+            <div class="mock-bubble in">请问会员积分月底会清零吗？</div>
+            <div class="mock-bubble out">您好，积分有效期为 24 个月，不会清零，可以放心攒～</div>
+            <div class="mock-bubble kb"><b>📚 知识推荐</b><br>铂金会员积分有效期与兑换规则 · 示意推荐</div>
+            <div class="mock-bubble in">太好了，那咖啡机要多少积分？</div>
+            <div class="mock-input">输入回复内容… Enter 发送</div>
+          </div>
+        </div>
+      </div>
+      <div class="float-card f1"><div class="fc"><span class="dot-green"></span><div><b>示意</b>客户满意度</div></div></div>
+      <div class="float-card f2"><div class="fc"><span class="dot-green"></span><div><b>示意</b>机器人平均应答</div></div></div>
+    </div>
+  </div>
+</section>
+<!-- ── 信任 Logo 墙（文案与品牌名来自官网配置 trust.*） ───── -->
+<div class="logos">
+  <div class="container">
+    <div class="l" data-cfg="trust.line">产品界面展示</div>
+    <div class="row" id="trust-brands"><span>功能与效果以实际部署为准</span></div>
+  </div>
+</div>
+<!-- ── 产品功能 ──────────────────────────────────────────── -->
+<section class="container sec" id="features">
+  <div class="sec-head reveal">
+    <div class="tag">PRODUCT FEATURES</div>
+    <h2 data-cfg="features.head">智能客服产品概览</h2>
+    <p data-cfg="features.sub">功能展示以当前源码和实际部署环境为准</p>
+  </div>
+  <div class="bento">
+    <div class="bento-card dark span2 reveal">
+      <span class="ic" style="background:linear-gradient(135deg,#3b82f6,#0ea5e9)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="8" width="14" height="11" rx="3"/><circle cx="9.5" cy="13.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="13.5" r="1.1" fill="currentColor" stroke="none"/></svg></span>
+      <h3 data-cfg="features.items.0.t">大模型智能机器人</h3>
+      <p data-cfg="features.items.0.d">产品方向展示，具体能力以当前部署和实际接入为准。</p>
+      <a class="more" href="#demo">体验机器人对话 →</a>
+    </div>
+    <div class="bento-card reveal">
+      <span class="ic" style="background:linear-gradient(135deg,#3b82f6,#2563eb)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a13.5 13.5 0 0 1 0 18M12 3a13.5 13.5 0 0 0 0 18"/></svg></span>
+      <h3 data-cfg="features.items.1.t">全渠道统一接入</h3>
+      <p data-cfg="features.items.1.d">产品方向展示，具体能力以当前部署和实际接入为准。</p>
+      <a class="more" href="#demo">六大渠道演示 →</a>
+    </div>
+    <div class="bento-card reveal">
+      <span class="ic" style="background:linear-gradient(135deg,#10b981,#059669)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg></span>
+      <h3 data-cfg="features.items.2.t">企业知识库</h3>
+      <p data-cfg="features.items.2.d">产品方向展示，具体能力以当前部署和实际接入为准。</p>
+    </div>
+    <div class="bento-card reveal">
+      <span class="ic" style="background:linear-gradient(135deg,#f59e0b,#ea580c)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg></span>
+      <h3 data-cfg="features.items.3.t">全量 AI 质检</h3>
+      <p data-cfg="features.items.3.d">产品方向展示，具体能力以当前部署和实际接入为准。</p>
+    </div>
+    <div class="bento-card reveal">
+      <span class="ic" style="background:linear-gradient(135deg,#ec4899,#db2777)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16v3a2 2 0 0 0 0 4v3H4v-3a2 2 0 0 0 0-4z"/><path d="M10 7v10"/></svg></span>
+      <h3 data-cfg="features.items.4.t">工单跨部门协作</h3>
+      <p data-cfg="features.items.4.d">产品方向展示，具体能力以当前部署和实际接入为准。</p>
+    </div>
+    <div class="bento-card reveal">
+      <span class="ic" style="background:linear-gradient(135deg,#06b6d4,#0891b2)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="1"/><rect x="12" y="8" width="3" height="10" rx="1"/><rect x="17" y="5" width="3" height="13" rx="1"/></svg></span>
+      <h3 data-cfg="features.items.5.t">多维数据洞察</h3>
+      <p data-cfg="features.items.5.d">产品方向展示，具体能力以当前部署和实际接入为准。</p>
+    </div>
+  </div>
+</section>
+<!-- ── 工作台展示（深色） ────────────────────────────────── -->
+<section class="showcase" id="product">
+  <div class="container showcase-grid">
+    <div class="reveal">
+      <div class="tag" data-cfg="showcase.tag">ALL-IN-ONE WORKSPACE</div>
+      <h2 data-cfg="showcase.title">一个工作台，接待全渠道客户</h2>
+      <p data-cfg="showcase.desc">工作台界面为设计示意，具体能力以实际部署为准。</p>
+      <ul>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span data-cfg="showcase.points.0">客户资料展示示意</span></li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span data-cfg="showcase.points.1">知识推荐示意</span></li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span data-cfg="showcase.points.2">坐席协作示意</span></li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span data-cfg="showcase.points.3">路由分配示意</span></li>
+      </ul>
+      <div class="ctas">
+        <a class="btn btn-primary" href="#" data-app-link="/workspace">进入客服工作台</a>
+        <a class="btn btn-ghost-dark" href="#demo">看实时对话演示</a>
+      </div>
+    </div>
+    <div class="ws-mock reveal" aria-hidden="true">
+      <div class="head"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+      <div class="cols">
+        <div class="col">
+          <div class="ws-item"><span class="av" style="background:linear-gradient(135deg,#ec4899,#f43f5e)">刘</span><div>刘雅静<div style="font-size:10px;opacity:.6">微信 · 42s</div></div></div>
+          <div class="ws-item active"><span class="av" style="background:linear-gradient(135deg,#3b82f6,#0ea5e9)">张</span><div>张梦琪<div style="font-size:10px;opacity:.6">App · 接待中</div></div></div>
+          <div class="ws-item"><span class="av" style="background:linear-gradient(135deg,#3b82f6,#06b6d4)">王</span><div>王浩宇<div style="font-size:10px;opacity:.6">网站 · 机器人</div></div></div>
+          <div class="ws-item"><span class="av" style="background:linear-gradient(135deg,#10b981,#34d399)">陈</span><div>陈博文<div style="font-size:10px;opacity:.6">网站 · 3m</div></div></div>
+        </div>
+        <div class="col">
+          <div style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600">张梦琪<span style="margin-left:auto;font-size:10px;color:rgba(255,255,255,.5)">陈思远 接待中</span></div>
+          <div class="b in">洗衣机安装后一直有异响，我要今天上门处理</div>
+          <div class="b out">非常抱歉给您带来困扰，我马上为您登记上门服务（预计 4 小时内联系）</div>
+          <div class="b warn">⚠️ 实时质检预警 · 情绪安抚话术缺失，建议先共情再给方案</div>
+          <div class="b out">示例：模拟转派售后处理技能组</div>
+          <div class="ws-input">输入回复内容… Enter 发送</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- ── 实时演示（内嵌访客端客服窗口 demo.html） ───────────── -->
+<section class="container sec" id="demo">
+  <div class="sec-head reveal">
+    <div class="tag">LIVE DEMO</div>
+    <h2 data-cfg="demo.head">交互演示</h2>
+    <p data-cfg="demo.sub">演示页使用固定问答和模拟人工回复，不连接真实客服会话。</p>
+  </div>
+  <div class="demo-panel reveal">
+    <div class="frame">
+      <iframe src="demo.html" title="云梯智能客服 · 产品实时演示" loading="lazy"></iframe>
+    </div>
+  </div>
+  <div class="demo-cta reveal">
+    <a class="btn btn-primary btn-lg" href="#" data-app-link="/channels">在控制台配置我的渠道</a>
+    <a class="btn btn-outline btn-lg" href="demo.html" target="_blank" rel="noopener">新窗口打开演示</a>
+  </div>
+</section>
+<!-- ── 行业方案 ──────────────────────────────────────────── -->
+<section id="solutions" style="background:var(--bg-2);padding:104px 0">
+  <div class="container">
+    <div class="sec-head reveal">
+      <div class="tag">SOLUTIONS</div>
+      <h2 data-cfg="solutions.head">覆盖主流行业场景</h2>
+      <p data-cfg="solutions.sub">以下为场景设计示意，尚无可核实的效果数据</p>
+    </div>
+    <div class="sol-grid">
+      <div class="sol-card reveal">
+        <div class="sol-media" style="background:linear-gradient(135deg,#fde8d7,#f59e0b)">
+          <div class="se" style="background:linear-gradient(135deg,#f59e0b,#ea580c)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></div>
+        </div>
+        <h4 data-cfg="solutions.items.0.t">电商零售</h4>
+        <p data-cfg="solutions.items.0.d">场景示意，具体能力以实际部署为准。</p>
+        <span class="sol-kpi">场景示例</span>
+      </div>
+      <div class="sol-card reveal">
+        <div class="sol-media" style="background:linear-gradient(135deg,#dbeafe,#3b82f6)">
+          <div class="se" style="background:linear-gradient(135deg,#3b82f6,#2563eb)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9h20M12 5V3M7 9v8m5-8v8m5-8v8"/><path d="M4 9v10h16V9"/><path d="M9 13h6"/></svg></div>
+        </div>
+        <h4 data-cfg="solutions.items.1.t">教育培训</h4>
+        <p data-cfg="solutions.items.1.d">场景示意，具体能力以实际部署为准。</p>
+        <span class="sol-kpi">场景示例</span>
+      </div>
+      <div class="sol-card reveal">
+        <div class="sol-media" style="background:linear-gradient(135deg,#d1fae5,#10b981)">
+          <div class="se" style="background:linear-gradient(135deg,#10b981,#059669)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg></div>
+        </div>
+        <h4 data-cfg="solutions.items.2.t">金融保险</h4>
+        <p data-cfg="solutions.items.2.d">场景示意，具体能力以实际部署为准。</p>
+        <span class="sol-kpi">场景示例</span>
+      </div>
+      <div class="sol-card reveal">
+        <div class="sol-media" style="background:linear-gradient(135deg,#e0f2fe,#0ea5e9)">
+          <div class="se" style="background:linear-gradient(135deg,#2563eb,#0ea5e9)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></div>
+        </div>
+        <h4 data-cfg="solutions.items.3.t">企业服务</h4>
+        <p data-cfg="solutions.items.3.d">场景示意，具体能力以实际部署为准。</p>
+        <span class="sol-kpi">场景示例</span>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- ── 案例说明 ── -->
+<section class="container sec" id="cases"><div class="sec-head"><div class="tag">SCENARIOS</div><h2>应用场景示意</h2><p>暂无经核实的客户案例或效果数据。</p></div></section>
+<!-- ── 定价：只展示计费服务已发布的套餐 ── -->
+<section class="container sec" id="pricing">
+  <div class="sec-head reveal">
+    <div class="tag">PRICING</div>
+    <h2 data-cfg="pricing.head">套餐信息</h2>
+    <p data-cfg="pricing.sub">计费服务尚未发布套餐，价格与配额待公布</p>
+  </div>
+  <div class="price-grid" id="price-grid"><div class="plan"><h4>套餐信息待发布</h4><p>计费服务尚未提供已上架套餐，暂不展示价格与配额。</p></div></div>
+<p class="price-note">实际套餐以未来发布的计费数据为准。</p>
+</section>
+<!-- ── 常见问题 ──────────────────────────────────────────── -->
+<section class="container sec" id="faq">
+  <div class="sec-head reveal">
+    <div class="tag">FAQ</div>
+    <h2 data-cfg="faq.head">常见问题</h2>
+  </div>
+  <div class="faq reveal" id="faq-list"><div class="faq-item"><div class="faq-q">如何了解产品？<span class="pm">＋</span></div><div class="faq-a">可以浏览交互演示；真实能力以当前部署为准。</div></div></div>
+</section>
+<!-- ── 底部 CTA ──────────────────────────────────────────── -->
+<section class="container sec">
+  <div class="cta reveal">
+    <h2 data-cfg="cta.title">开始打造您的智能客服团队</h2>
+    <p data-cfg="cta.desc">可先查看交互演示，注册后以管理端实际功能为准</p>
+    <div class="row">
+      <a class="btn btn-light btn-lg" href="#" data-app-link="/register" data-cfg="cta.btn1">注册体验</a>
+      <a class="btn btn-ghost-dark btn-lg" href="#demo" data-cfg="cta.btn2">查看产品演示</a>
+    </div>
+  </div>
+</section>
+<!-- ── 页脚 ──────────────────────────────────────────────── -->
+<footer class="footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="brand">
+        <div class="fbrand">
+          <span class="mark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          </span>
+          <span class="brand-name">云梯智能客服</span>
+        </div>
+        <p data-cfg="footer.slogan">探索 AI 辅助客服工作流程</p>
+      </div>
+      <div>
+        <h5>产品</h5>
+        <a href="#features">产品功能</a>
+        <a href="#product">产品演示</a>
+        <a href="#demo">实时体验</a>
+        <a href="#pricing">定价</a>
+        <a href="#" data-app-link="/register">注册体验</a>
+      </div>
+      <div>
+        <h5>资源</h5>
+        <a href="demo.html">访客端客服组件</a>
+        <a href="#faq">常见问题</a>
+        <a href="legal.html?t=terms">服务条款</a>
+        <a href="legal.html?t=privacy">隐私政策</a>
+      </div>
+      <div>
+        <h5>产品动态登记演示</h5>
+        <p class="muted">仅保存在当前浏览器，不会发送订阅邮件</p>
+        <form class="newsletter" id="subscribe-form" novalidate>
+          <input type="email" name="email" placeholder="输入工作邮箱" aria-label="工作邮箱" required />
+          <button class="btn btn-primary btn-sm" type="submit">本地记录</button>
+        </form>
+      </div>
+    </div>
+    <div class="copy">
+      <span data-cfg="footer.copyright">© 2026 云梯智能客服 · 保留所有权利</span>
+      <span><span data-cfg="footer.icp">备案信息待核实</span> · <a href="legal.html?t=privacy">隐私政策</a> · <a href="legal.html?t=terms">服务条款</a></span>
+    </div>
+  </div>
+</footer>
+<script src="assets/js/site.js" defer></script>
+</body>
+</html>
