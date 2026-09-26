@@ -5,6 +5,7 @@ import cn.net.susan.common.exception.BizException;
 import cn.net.susan.common.id.SnowflakeIdGenerator;
 import cn.net.susan.customer.entity.Channel;
 import cn.net.susan.customer.entity.ChannelKey;
+import cn.net.susan.customer.entity.CsatRecord;
 import cn.net.susan.customer.entity.Customer;
 import cn.net.susan.customer.entity.Session;
 import cn.net.susan.customer.entity.SessionEvent;
@@ -30,6 +31,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.security.SecureRandom;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -104,6 +106,9 @@ public class SessionService {
     private final SessionMessageMapper sessionMessageMapper;
     private final SessionEventMapper sessionEventMapper;
     private final CustomerMapper customerMapper;
+    private final CustomerDynamics dynamics;
+    private final cn.net.susan.customer.mapper.CsatRecordMapper csatRecordMapper;
+    private final ObjectProvider<CustomerTagRuleService> tagRuleProvider;
     private final ChannelMapper channelMapper;
     private final ChannelKeyMapper channelKeyMapper;
     private final VisitorTokenService visitorTokenService;
@@ -163,6 +168,9 @@ public class SessionService {
             SessionMessageMapper sessionMessageMapper,
             SessionEventMapper sessionEventMapper,
             CustomerMapper customerMapper,
+            CustomerDynamics dynamics,
+            cn.net.susan.customer.mapper.CsatRecordMapper csatRecordMapper,
+            ObjectProvider<CustomerTagRuleService> tagRuleProvider,
             ChannelMapper channelMapper,
             ChannelKeyMapper channelKeyMapper,
             VisitorTokenService visitorTokenService,
@@ -179,6 +187,9 @@ public class SessionService {
         this.sessionMessageMapper = sessionMessageMapper;
         this.sessionEventMapper = sessionEventMapper;
         this.customerMapper = customerMapper;
+        this.dynamics = dynamics;
+        this.csatRecordMapper = csatRecordMapper;
+        this.tagRuleProvider = tagRuleProvider;
         this.channelMapper = channelMapper;
         this.channelKeyMapper = channelKeyMapper;
         this.visitorTokenService = visitorTokenService;
@@ -234,6 +245,9 @@ public class SessionService {
         if (session == null) {
             session = createSession(tenant, channel, customer);
             created = true;
+            dynamics.system(tenant, customer.getId(), CustomerDynamics.SESSION_START,
+                    "发起会话", "渠道：" + channel.getName(), CustomerDynamics.REF_SESSION,
+                    session.getSessionNo());
             if (botReceptionEnabled()) {
                 // 机器人先接待：先进"2-机器人接待"，不立刻派人工。
                 // 客户问完，AI 客服大脑判断该转人工时才入队（见 BotBrainService.escalate）。
@@ -359,6 +373,7 @@ public class SessionService {
                 session.getCustomerId(),
                 customer == null ? null : customer.getName(),
                 customer == null ? null : customer.getLevel(),
+                customer == null ? null : customer.getCustomerNo(),
                 session.getSource(),
                 session.getIntent(),
                 session.getEmotion(),
@@ -950,6 +965,10 @@ public class SessionService {
         session.setBotTransferReason(remark);
         recordEvent(tenantCode, session.getId(), EVENT_BOT_TRANSFER, null, "BOT", QUEUE_TARGET,
                 remark == null ? "智能客服转人工" : remark);
+        dynamics.system(tenantCode, session.getCustomerId(), CustomerDynamics.HUMAN_TRANSFER,
+                "转人工：" + (remark == null ? "智能客服转人工" : remark),
+                "会话 " + sessionNo + " 由智能客服转人工接待",
+                CustomerDynamics.REF_SESSION, sessionNo);
         MessageVO noticeVO = null;
         if (notice != null && !notice.isBlank()) {
             SessionMessage message = buildMessage(
@@ -1104,10 +1123,122 @@ public class SessionService {
         session.setEndTime(now);
         recordEvent(tenantCode, session.getId(), EVENT_CLOSE, operatorId, null, null, trimRemark(remark));
         appendSystemMessage(tenantCode, session, "本次会话已结束，感谢您的咨询");
+        dynamics.record(tenantCode, session.getCustomerId(), CustomerDynamics.SESSION_END,
+                "会话结束", trimRemark(remark) == null ? "会话 " + sessionNo + " 已结束"
+                        : "会话 " + sessionNo + " 已结束：" + trimRemark(remark),
+                CustomerDynamics.REF_SESSION, sessionNo, operatorId, null);
+        recalcCustomerTags(tenantCode, session.getCustomerId());
         // 会话一结束就进质检：按真实对话建一条待复核任务（事务提交后跑）
         scheduleQaTask(tenantCode, session, operatorId);
         log.info("会话已结束 tenant={} sessionNo={} operator={}", tenantCode, sessionNo, operatorId);
         return session;
+    }
+
+    /**
+     * 会话结束 / 转人工之后，跑一次规则标签重算。
+     *
+     * <p>"近 30 天投诉两次""近 90 天退款三次"这类标签只有在会话结束后才算得准；
+     * 规则引擎出问题不能让会话结束不了，所以只记日志。</p>
+     */
+    private void recalcCustomerTags(String tenantCode, Long customerId) {
+        if (customerId == null) {
+            return;
+        }
+        try {
+            CustomerTagRuleService rules = tagRuleProvider.getIfAvailable();
+            if (rules != null) {
+                rules.recalculateForCustomer(tenantCode, customerId, null);
+            }
+        } catch (Exception e) {
+            log.warn("规则标签重算失败（不影响会话结束）tenant={} customerId={} error={}",
+                    tenantCode, customerId, e.getMessage());
+        }
+    }
+
+    /**
+     * 满意度评价（会话结束后由客户评价，坐席回访时也能代录）。
+     *
+     * <p>三处都要写：</p>
+     * <ol>
+     *   <li><b>csat_record</b>：评价明细（一条会话一条，重复评价是"改评价"，做更新）；</li>
+     *   <li><b>session.csat_score</b>：这条会话几分（工作台/轨迹里直接显示）；</li>
+     *   <li><b>customer.csat</b>：这个人的口碑均值（客户 360 画像上的"满意度"）；</li>
+     * </ol>
+     *
+     * <p>只允许评价"已结束"的会话：还没接待完就打分，等于让客户给半成品打分。</p>
+     */
+    @Transactional
+    public CsatResult submitCsat(String tenantCode, String sessionNo, int score, String feedback,
+                                 Long operatorId, String operatorName) {
+        if (score < 1 || score > 5) {
+            throw new BizException(40001, "满意度评分只能是 1~5");
+        }
+        Session session = requireSession(tenantCode, sessionNo);
+        if (!Integer.valueOf(STATUS_CLOSED).equals(session.getStatus())) {
+            throw new BizException(40001, "会话还没结束，暂时不能评价");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        String text = trimRemark(feedback);
+        Long customerId = session.getCustomerId();
+        Long agentId = session.getAgentId();
+
+        CsatRecord existing = csatRecordMapper.selectOne(
+                Wrappers.<CsatRecord>lambdaQuery()
+                        .eq(CsatRecord::getTenantCode, tenantCode)
+                        .eq(CsatRecord::getSessionId, session.getId())
+                        .last("LIMIT 1"));
+        if (existing == null) {
+            csatRecordMapper.insert(CsatRecord.builder()
+                    .id(idGenerator.nextId())
+                    .tenantCode(tenantCode)
+                    .sessionId(session.getId())
+                    .customerId(customerId)
+                    .agentId(agentId)
+                    .score(score)
+                    .feedback(text)
+                    .evaluateTime(now)
+                    .createTime(now)
+                    .updateTime(now)
+                    .creator(operatorName == null ? "VISITOR" : operatorName)
+                    .deleted(false)
+                    .build());
+        } else {
+            CsatRecord update = new CsatRecord();
+            update.setId(existing.getId());
+            update.setScore(score);
+            update.setFeedback(text);
+            update.setEvaluateTime(now);
+            update.setUpdateTime(now);
+            update.setEditor(operatorName);
+            csatRecordMapper.updateById(update);
+        }
+
+        Session update = new Session();
+        update.setId(session.getId());
+        update.setCsatScore(score);
+        update.setUpdateTime(now);
+        sessionMapper.updateById(update);
+
+        BigDecimal average = null;
+        if (customerId != null) {
+            average = csatRecordMapper.selectCustomerAverage(tenantCode, customerId);
+            Customer customer = new Customer();
+            customer.setId(customerId);
+            customer.setCsat(average);
+            customer.setUpdateTime(now);
+            customerMapper.updateById(customer);
+        }
+        dynamics.record(tenantCode, customerId, CustomerDynamics.CSAT,
+                "满意度评价 " + score + " 分",
+                text == null ? "会话 " + sessionNo + " 的满意度评价" : text,
+                CustomerDynamics.REF_SESSION, sessionNo, operatorId, operatorName);
+        log.info("满意度评价 tenant={} sessionNo={} score={} 客户均值={}",
+                tenantCode, sessionNo, score, average);
+        return new CsatResult(score, text, average);
+    }
+
+    /** 满意度评价结果 */
+    public record CsatResult(int score, String feedback, BigDecimal average) {
     }
 
     /**
@@ -1199,12 +1330,31 @@ public class SessionService {
                     .build();
             try {
                 sessionMapper.insert(session);
+                countCustomerSession(tenant, customer.getId(), now);
                 return session;
             } catch (DuplicateKeyException e) {
                 log.warn("会话号冲突，重试第 {} 次", attempt + 1);
             }
         }
         throw new BizException(50001, "会话创建失败，请稍后重试");
+    }
+
+    /**
+     * 客户 360 的冗余计数：累计会话数 +1、最近会话时间刷新。
+     *
+     * <p>为什么在 SQL 里做自增（而不是先读出来加一）：同一秒两个渠道同时进线也不会算漏，
+     * 而且这个计数只用于客户列表的排序与筛选，展示口径以实时聚合为准。</p>
+     */
+    private void countCustomerSession(String tenant, Long customerId, LocalDateTime time) {
+        if (customerId == null) {
+            return;
+        }
+        customerMapper.update(null, Wrappers.<Customer>lambdaUpdate()
+                .eq(Customer::getTenantCode, tenant)
+                .eq(Customer::getId, customerId)
+                .setSql("session_count = session_count + 1")
+                .set(Customer::getLastSessionAt, time)
+                .set(Customer::getUpdateTime, time));
     }
 
     private void appendSystemMessage(String tenant, Session session, String content) {
@@ -1334,7 +1484,20 @@ public class SessionService {
                 .deleted(false)
                 .build();
         customerMapper.insert(customer);
+        appendCustomerCreatedEvent(customer, channelName);
         return customer;
+    }
+
+    /**
+     * 客户 360 的第一条动态：建档。
+     *
+     * <p>访客是"一进会话就自动建档"的，如果不留这一条记录，新客户的「客户动态」页签
+     * 在有人给他打标 / 写备注之前一直是空的——坐席会以为"这个客户没有历史"，
+     * 其实是"没人记过"。写失败只记日志：建档是主流程，不能因为一条动态把进线堵住。</p>
+     */
+    private void appendCustomerCreatedEvent(Customer customer, String channelName) {
+        dynamics.system(customer.getTenantCode(), customer.getId(), CustomerDynamics.CREATE,
+                "客户建档", channelName == null ? "来源：未知渠道" : "来源：" + channelName, null, null);
     }
 
     /**
@@ -1461,6 +1624,7 @@ public class SessionService {
                 longValue(row.get("customer_id")),
                 stringValue(row.get("customer_name")),
                 intValue(row.get("customer_level")),
+                stringValue(row.get("customer_no")),
                 stringValue(row.get("source")),
                 stringValue(row.get("intent")),
                 stringValue(row.get("emotion")),
@@ -1561,6 +1725,7 @@ public class SessionService {
             Long customerId,
             String customerName,
             Integer customerLevel,
+            String customerNo,
             String source,
             String intent,
             String emotion,

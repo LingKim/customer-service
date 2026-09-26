@@ -56,6 +56,7 @@ public class SchemaGuard implements ApplicationRunner {
             "customer_db_bot_brain.sql",
             "customer_db_chat_image.sql",
             "customer_db_ticket.sql",
+            "customer_db_customer360.sql",
             "customer_db_metrics.sql"
     );
 
@@ -107,6 +108,10 @@ public class SchemaGuard implements ApplicationRunner {
         REQUIRED_TABLES.put("ticket_sla_rule", "customer_db_ticket.sql");
         REQUIRED_TABLES.put("notification", "customer_db_ticket.sql");
         REQUIRED_TABLES.put("notification_read", "customer_db_ticket.sql");
+        REQUIRED_TABLES.put("customer_tag_def", "customer_db_customer360.sql");
+        REQUIRED_TABLES.put("customer_tag", "customer_db_customer360.sql");
+        REQUIRED_TABLES.put("customer_event", "customer_db_customer360.sql");
+        REQUIRED_TABLES.put("csat_record", "customer_db_customer360.sql");
         REQUIRED_TABLES.put("agent_daily_metric", "customer_db_metrics.sql");
 
         REQUIRED_COLUMNS.put("channel.allowed_origins", "customer_db_security.sql");
@@ -130,6 +135,9 @@ public class SchemaGuard implements ApplicationRunner {
         REQUIRED_COLUMNS.put("ticket.source_channel", "customer_db_ticket.sql");
         REQUIRED_COLUMNS.put("ticket_event.operator_name", "customer_db_ticket.sql");
         REQUIRED_COLUMNS.put("ticket_sla_rule.first_response_minutes", "customer_db_ticket.sql");
+        REQUIRED_COLUMNS.put("customer.customer_type", "customer_db_customer360.sql");
+        REQUIRED_COLUMNS.put("customer_tag_def.rule_op", "customer_db_customer360.sql");
+        REQUIRED_COLUMNS.put("customer_tag_def.rule_value", "customer_db_customer360.sql");
         REQUIRED_COLUMNS.put("agent_daily_metric.csat_score", "customer_db_metrics.sql");
         REQUIRED_COLUMNS.put("agent_daily_metric.transfer_count", "customer_db_metrics.sql");
 

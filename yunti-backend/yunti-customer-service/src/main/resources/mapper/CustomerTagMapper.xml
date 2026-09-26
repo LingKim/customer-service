@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.customer.mapper.CustomerTagMapper">
+
+    <!-- 一批客户身上的标签：左连标签定义拿分组与颜色（历史数据可能只有标签名，tag_id 为空） -->
+    <select id="selectTagsOfCustomers" resultType="java.util.Map">
+        SELECT t.customer_id     AS customer_id,
+               t.tag_id          AS tag_id,
+               t.tag_name        AS tag_name,
+               COALESCE(d.tag_group, t.tag_group, '其它') AS tag_group,
+               COALESCE(d.color, 'gray')                  AS color,
+               COALESCE(d.tag_type, 1)                    AS tag_type,
+               t.source          AS source,
+               t.operator_name   AS operator_name,
+               t.create_time     AS create_time
+          FROM customer_tag t
+          LEFT JOIN customer_tag_def d
+                 ON d.id = t.tag_id
+                AND d.is_deleted = FALSE
+         WHERE t.tenant_code = #{tenantCode}
+           AND t.is_deleted = FALSE
+           AND t.customer_id IN
+           <foreach collection="customerIds" item="id" open="(" separator="," close=")">
+               #{id}
+           </foreach>
+         ORDER BY COALESCE(d.sort_no, 100), t.tag_name
+    </select>
+    <!-- 标签筛选：先按标签找出客户 ID，主查询再 IN（客户量级不大，这样最直观也最好排错） -->
+    <select id="selectCustomerIdsByTag" resultType="java.lang.Long">
+        SELECT DISTINCT t.customer_id
+          FROM customer_tag t
+         WHERE t.tenant_code = #{tenantCode}
+           AND t.is_deleted = FALSE
+           AND t.tag_id = #{tagId}
+    </select>
+</mapper>

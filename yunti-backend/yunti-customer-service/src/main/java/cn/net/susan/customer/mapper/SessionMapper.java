@@ -171,4 +171,57 @@ public interface SessionMapper extends BaseMapper<Session> {
 
     /** 有会话数据的租户（绩效定时重算按租户逐个跑） */
     List<String> selectTenantsForMetrics();
+
+    /**
+     * 客户 360：一批客户的会话统计（累计会话数 / 最近会话时间 / 转人工次数）。
+     *
+     * <p>为什么不在客户列表里循环查：一页 50 个客户就是 50 次查询，
+     * 客户 360 是要天天打开的页面，这种写法迟早被数据量打回来。</p>
+     */
+    List<Map<String, Object>> selectCustomerSessionStats(
+            @Param("tenantCode") String tenantCode,
+            @Param("customerIds") List<Long> customerIds
+    );
+
+    /**
+     * 客户 360：一批客户各自<b>最近一次</b>会话（列表里直接看到"最近意图 / 情绪"）。
+     *
+     * <p>用 Postgres 的 DISTINCT ON 取每个客户最新那条，比"先查全部再在内存里分组"省事且不会漏。</p>
+     */
+    List<Map<String, Object>> selectCustomerLatestSessions(
+            @Param("tenantCode") String tenantCode,
+            @Param("customerIds") List<Long> customerIds
+    );
+
+    /**
+     * 客户 360 · 会话轨迹：某个客户的全部会话（倒序），带坐席姓名、消息数、是否转工单。
+     */
+    List<Map<String, Object>> selectSessionsOfCustomer(
+            @Param("tenantCode") String tenantCode,
+            @Param("customerId") Long customerId,
+            @Param("limit") int limit
+    );
+
+    /**
+     * 客户 360 · 概览：租户级别的客户经营数字（客户数 / 本月新增 / 有标签的 / 风险客户 …）。
+     */
+    Map<String, Object> selectCustomerOverview(
+            @Param("tenantCode") String tenantCode,
+            @Param("monthStart") java.time.LocalDateTime monthStart,
+            @Param("activeSince") java.time.LocalDateTime activeSince
+    );
+
+    /**
+     * 客户 360 · 规则标签：算一个客户在"最近 windowDays 天"里的会话类指标。
+     *
+     * <p>为什么要按窗口算：规则标签大多是"近期行为"——"近 30 天投诉两次"和"三年前投诉过两次"
+     * 是两种客户，不带上窗口的话标签永远摘不掉。</p>
+     *
+     * @param windowDays 统计窗口（天）；0 或负数表示全周期
+     */
+    Map<String, Object> selectCustomerRuleMetrics(
+            @Param("tenantCode") String tenantCode,
+            @Param("customerId") Long customerId,
+            @Param("windowDays") int windowDays
+    );
 }

@@ -52,6 +52,9 @@
           <span>工单中心</span>
           <el-badge v-if="ticketTodo" :value="ticketTodo" class="menu-count" />
         </el-menu-item>
+        <el-menu-item v-if="userStore.userType === 2" index="/modules/customers">
+          <span>客户 360</span>
+        </el-menu-item>
         <el-menu-item v-if="userStore.userType === 1" index="/admin/reviews">
           <el-icon><Stamp /></el-icon>
           <span>企业审核</span>

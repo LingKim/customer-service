@@ -113,6 +113,18 @@ const router = createRouter({
           component: () => import('../views/tickets/index.vue'),
           meta: { title: '工单中心', requiresEnterprise: true },
         },
+        {
+          path: 'modules/customers',
+          name: 'Customers',
+          component: () => import('../views/customers/index.vue'),
+          meta: { title: '客户 360', requiresEnterprise: true },
+        },
+        {
+          path: 'modules/customers/tags',
+          name: 'CustomerTags',
+          component: () => import('../views/customers/tags.vue'),
+          meta: { title: '标签体系', requiresEnterprise: true },
+        },
       ],
     },
     {

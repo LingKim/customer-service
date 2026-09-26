@@ -4,6 +4,7 @@ import cn.net.susan.common.api.ApiResponse;
 import cn.net.susan.common.auth.LoginUser;
 import cn.net.susan.customer.security.JwtTokenParser;
 import cn.net.susan.customer.security.OpenSessionRateLimiter;
+import cn.net.susan.customer.security.VisitorTokenService;
 import cn.net.susan.customer.service.SessionService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -30,15 +31,41 @@ public class SessionController {
     private final SessionService sessionService;
     private final JwtTokenParser jwtTokenParser;
     private final OpenSessionRateLimiter openSessionRateLimiter;
+    private final VisitorTokenService visitorTokenService;
 
     public SessionController(
             SessionService sessionService,
             JwtTokenParser jwtTokenParser,
-            OpenSessionRateLimiter openSessionRateLimiter
+            OpenSessionRateLimiter openSessionRateLimiter,
+            VisitorTokenService visitorTokenService
     ) {
         this.sessionService = sessionService;
         this.jwtTokenParser = jwtTokenParser;
         this.openSessionRateLimiter = openSessionRateLimiter;
+        this.visitorTokenService = visitorTokenService;
+    }
+
+    @PostMapping("/{sessionNo}/csat")
+    public ApiResponse<SessionService.CsatResult> submitCsat(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String sessionNo,
+            @RequestBody CsatBody body
+    ) {
+        int score = body.score() == null ? 0 : body.score();
+        if (authorization != null && !authorization.isBlank()) {
+            LoginUser user = jwtTokenParser.requireLoginUser(authorization);
+            return ApiResponse.ok(sessionService.submitCsat(user.tenantCode(), sessionNo, score,
+                    body.feedback(), user.userId(), user.name()));
+        }
+        VisitorTokenService.VisitorPrincipal principal = visitorTokenService.parseToken(body.visitorToken());
+        if (principal == null || !sessionNo.equals(principal.sessionNo())) {
+            throw new cn.net.susan.common.exception.BizException(40301, "访客身份无效，请重新打开客服窗口后再评价");
+        }
+        return ApiResponse.ok(sessionService.submitCsat(principal.tenantCode(), sessionNo, score,
+                body.feedback(), null, principal.customerName()));
+    }
+
+    public record CsatBody(Integer score, String feedback, String visitorToken) {
     }
 
     /**

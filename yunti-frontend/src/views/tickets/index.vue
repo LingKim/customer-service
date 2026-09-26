@@ -1227,8 +1227,16 @@ function openCreateFromQuery() {
   void router.replace({ path: '/modules/tickets' })
 }
 
+function openDetailFromQuery() {
+  const ticketNo = String(router.currentRoute.value.query.ticketNo ?? '').trim()
+  if (!ticketNo) return
+  void openDetail(ticketNo)
+  void router.replace({ path: '/modules/tickets' })
+}
+
 onMounted(() => {
   openCreateFromQuery()
+  openDetailFromQuery()
 })
 
 defineExpose({ openCreate })

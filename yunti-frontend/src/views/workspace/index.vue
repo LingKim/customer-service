@@ -195,6 +195,10 @@
                 <el-icon :size="13"><Tickets /></el-icon>
                 转工单
               </el-button>
+              <el-button size="small" :disabled="!activeSession?.customerNo" @click="openCustomer360">
+                <el-icon :size="13"><UserFilled /></el-icon>
+                客户 360
+              </el-button>
             </div>
           </div>
           <div v-if="pendingQaAlerts" class="qa-banner">
@@ -469,6 +473,7 @@ import {
   Search,
   Service,
   Tickets,
+  UserFilled,
   Warning,
   WarningFilled,
 } from '@element-plus/icons-vue'
@@ -1463,6 +1468,12 @@ function openClose() {
  * 放在工单中心那个页面里更顺手；带过去的三个参数够预填标题和描述了，
  * 后端的"会话转单"还会把来源会话与最近对话摘要一起写进工单。</p>
  */
+function openCustomer360() {
+  const customerNo = activeSession.value?.customerNo
+  if (!customerNo) return
+  void router.push({ path: '/modules/customers', query: { customerNo } })
+}
+
 function openTicket() {
   const sessionNo = activeSessionNo.value
   if (!sessionNo) {

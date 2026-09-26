@@ -33,7 +33,7 @@ public class Customer {
 
     private String phone;
 
-    /** 会员等级码：1-普通、2-银卡、3-金卡、4-铂金、5-企业 */
+    /** 会员等级码：1-普通、2-银卡、3-金卡、4-铂金、5-钻石；企业客户由 customerType 表示。 */
     private Integer level;
 
     /** 来源渠道 */
@@ -50,6 +50,23 @@ public class Customer {
     private Integer sentiment;
 
     private LocalDateTime lastActive;
+
+    private String remark;
+
+    private Integer sessionCount;
+
+    private Integer ticketCount;
+
+    private LocalDateTime lastSessionAt;
+
+    private Integer riskLevel;
+
+    private String mergedInto;
+
+    private LocalDateTime anonymizedAt;
+
+    /** 1-个人客户、2-企业客户。 */
+    private Integer customerType;
 
     private LocalDateTime createTime;
 

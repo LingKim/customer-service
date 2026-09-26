@@ -187,6 +187,17 @@
               发送
             </el-button>
           </div>
+          <div v-if="sessionClosed && !csatDone" class="csat-box">
+            <div class="csat-title">本次服务还满意吗？</div>
+            <el-rate v-model="csatScore" :max="5" show-score score-template="{value} 分" />
+            <el-input v-model="csatFeedback" maxlength="200" show-word-limit placeholder="补充一句（可选）" />
+            <el-button type="primary" size="small" :loading="csatSending" :disabled="!csatScore" @click="submitCsat">
+              提交评价
+            </el-button>
+          </div>
+          <div v-else-if="sessionClosed && csatDone" class="csat-box done">
+            感谢评价！你的评分已记录，我们会持续改进。
+          </div>
         </div>
       </template>
     </div>
@@ -212,6 +223,7 @@ import {
   messageTextOf,
   openVisitorSession,
   parseImageContent,
+  submitSessionCsat,
   uploadChatImage,
   type ChatImageItem,
   type ChatImageUploadResult,
@@ -261,6 +273,26 @@ interface VisitorSessionState {
 const sessionStatus = ref(1)
 /** 这条会话有没有人工客服接手（没接手就别说"客服在线"） */
 const hasAgent = ref(false)
+const csatScore = ref(0)
+const csatFeedback = ref('')
+const csatSending = ref(false)
+const csatDone = ref(false)
+
+async function submitCsat() {
+  if (!csatScore.value || !sessionNo.value || !visitorToken.value) return
+  csatSending.value = true
+  try {
+    await submitSessionCsat(sessionNo.value, {
+      score: csatScore.value,
+      feedback: csatFeedback.value.trim() || undefined,
+      visitorToken: visitorToken.value,
+    })
+    csatDone.value = true
+    ElMessage.success('评价已提交，谢谢！')
+  } finally {
+    csatSending.value = false
+  }
+}
 
 let client: RealtimeClient | null = null
 
@@ -1293,6 +1325,10 @@ function msgTime(value?: string | null) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.csat-box { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: #f8fafc;
+  border: 1px solid #eef2f7; display: flex; flex-direction: column; gap: 8px; }
+.csat-box.done { color: #16a34a; font-size: 13px; background: #f0fdf4; border-color: #dcfce7; }
+.csat-title { font-size: 13px; font-weight: 600; color: #334155; }
 
 .v-error {
   flex: 1;

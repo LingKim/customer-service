@@ -3,6 +3,7 @@ package cn.net.susan.customer.service;
 import cn.net.susan.common.auth.LoginUser;
 import cn.net.susan.common.exception.BizException;
 import cn.net.susan.common.id.SnowflakeIdGenerator;
+import cn.net.susan.customer.entity.Customer;
 import cn.net.susan.customer.entity.Ticket;
 import cn.net.susan.customer.entity.TicketEvent;
 import cn.net.susan.customer.entity.TicketSlaRule;
@@ -11,11 +12,13 @@ import cn.net.susan.customer.internal.UserRoleClient;
 import cn.net.susan.customer.mapper.TicketEventMapper;
 import cn.net.susan.customer.mapper.TicketMapper;
 import cn.net.susan.customer.mapper.TicketSlaRuleMapper;
+import cn.net.susan.customer.mapper.CustomerMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -137,6 +140,9 @@ public class TicketService {
     private final RealtimeNotifyClient notifyClient;
     private final UserRoleClient userRoleClient;
     private final NotificationService notificationService;
+    private final CustomerMapper customerMapper;
+    private final CustomerDynamics dynamics;
+    private final ObjectProvider<CustomerTagRuleService> tagRuleProvider;
     private final SnowflakeIdGenerator idGenerator;
 
     public TicketService(TicketMapper ticketMapper,
@@ -146,6 +152,9 @@ public class TicketService {
                          RealtimeNotifyClient notifyClient,
                          UserRoleClient userRoleClient,
                          NotificationService notificationService,
+                         CustomerMapper customerMapper,
+                         CustomerDynamics dynamics,
+                         ObjectProvider<CustomerTagRuleService> tagRuleProvider,
                          SnowflakeIdGenerator idGenerator) {
         this.ticketMapper = ticketMapper;
         this.ticketEventMapper = ticketEventMapper;
@@ -154,7 +163,48 @@ public class TicketService {
         this.notifyClient = notifyClient;
         this.userRoleClient = userRoleClient;
         this.notificationService = notificationService;
+        this.customerMapper = customerMapper;
+        this.dynamics = dynamics;
+        this.tagRuleProvider = tagRuleProvider;
         this.idGenerator = idGenerator;
+    }
+
+    /**
+     * 客户 360 的冗余计数：这个客户累计提了多少工单。
+     *
+     * <p>放在 SQL 里自增，并发建单也不会算漏；客户列表的"有过工单"筛选直接读这个计数，
+     * 不用每次去 ticket 表里数一遍。</p>
+     */
+    private void countCustomerTicket(String tenant, Long customerId) {
+        if (customerId == null) {
+            return;
+        }
+        customerMapper.update(null, Wrappers.<Customer>lambdaUpdate()
+                .eq(Customer::getTenantCode, tenant)
+                .eq(Customer::getId, customerId)
+                .setSql("ticket_count = ticket_count + 1")
+                .set(Customer::getUpdateTime, LocalDateTime.now()));
+    }
+
+    /**
+     * 触发一次规则标签重算（工单数变化可能让某个规则标签命中 / 失效）。
+     *
+     * <p>延迟注入 + 只记日志：标签自动化是"锦上添花"，建单才是主流程，
+     * 规则引擎出问题不能让客服建不了单。</p>
+     */
+    private void recalcTagsQuietly(String tenant, Long customerId) {
+        if (customerId == null) {
+            return;
+        }
+        try {
+            CustomerTagRuleService rules = tagRuleProvider.getIfAvailable();
+            if (rules != null) {
+                rules.recalculateForCustomer(tenant, customerId, null);
+            }
+        } catch (Exception e) {
+            log.warn("规则标签重算失败（不影响建单）tenant={} customerId={} error={}",
+                    tenant, customerId, e.getMessage());
+        }
     }
 
     // ------------------------------------------------------------------ 查询
@@ -401,6 +451,13 @@ public class TicketService {
                 .deleted(false)
                 .build();
         ticketMapper.insert(ticket);
+        countCustomerTicket(tenant, ticket.getCustomerId());
+        dynamics.record(tenant, ticket.getCustomerId(), CustomerDynamics.TICKET_CREATE,
+                "转工单：" + ticket.getTicketNo(),
+                (ticket.getSessionNo() == null ? "坐席建单" : "来自会话 " + ticket.getSessionNo())
+                        + "｜" + priorityText(priority) + "｜" + ticket.getTitle(),
+                CustomerDynamics.REF_TICKET, ticket.getTicketNo(), user.userId(), user.name());
+        recalcTagsQuietly(tenant, ticket.getCustomerId());
         appendEvent(tenant, ticket.getId(), EVENT_CREATE, user.userId(), user.name(),
                 null, STATUS_PENDING, false,
                 ticket.getSessionNo() == null

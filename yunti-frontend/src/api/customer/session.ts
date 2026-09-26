@@ -9,6 +9,7 @@ export interface SessionItem {
   customerId?: string | null
   customerName?: string | null
   customerLevel?: number | null
+  customerNo?: string | null
   source?: string | null
   intent?: string | null
   emotion?: string | null
@@ -241,5 +242,23 @@ visitorToken?: string
     method: 'post',
     data,
     silent: true,
+  })
+}
+
+/** 会话结束后的满意度评价。访客传会话令牌，坐席可用登录态。 */
+export interface CsatResult {
+  score: number
+  feedback?: string | null
+  average?: number | null
+}
+
+export function submitSessionCsat(
+  sessionNo: string,
+  body: { score: number; feedback?: string; visitorToken?: string },
+): Promise<CsatResult> {
+  return request<CsatResult>({
+    url: `/customer/sessions/${sessionNo}/csat`,
+    method: 'post',
+    data: body,
   })
 }

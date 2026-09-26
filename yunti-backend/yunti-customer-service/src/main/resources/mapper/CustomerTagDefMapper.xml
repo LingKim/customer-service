@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.customer.mapper.CustomerTagDefMapper">
+
+    <!-- 标签体系 + 使用量：一次查完，标签体系页按"用得多"排前面 -->
+    <select id="selectTagUsage" resultType="java.util.Map">
+        SELECT d.id              AS id,
+               d.tag_code        AS tag_code,
+               d.tag_name        AS tag_name,
+               d.tag_group       AS tag_group,
+               d.color           AS color,
+               d.tag_type        AS tag_type,
+               d.rule_hint       AS rule_hint,
+               d.rule_metric     AS rule_metric,
+               d.rule_op         AS rule_op,
+               d.rule_value      AS rule_value,
+               d.rule_window_days AS rule_window_days,
+               d.description     AS description,
+               d.sort_no         AS sort_no,
+               d.is_enabled      AS is_enabled,
+               d.create_time     AS create_time,
+               COUNT(t.id)       AS customer_count
+          FROM customer_tag_def d
+          LEFT JOIN customer_tag t
+                 ON t.tenant_code = d.tenant_code
+                AND t.tag_id = d.id
+                AND t.is_deleted = FALSE
+         WHERE d.tenant_code = #{tenantCode}
+           AND d.is_deleted = FALSE
+         GROUP BY d.id, d.tag_code, d.tag_name, d.tag_group, d.color, d.tag_type,
+                  d.rule_hint, d.rule_metric, d.rule_op, d.rule_value, d.rule_window_days,
+                  d.description, d.sort_no, d.is_enabled, d.create_time
+         ORDER BY d.tag_group, d.sort_no, d.id
+    </select>
+    <!-- 配了可执行规则的租户（定时任务只扫这些租户，别把全表拉一遍） -->
+    <select id="selectTenantsWithRunnableRules" resultType="java.lang.String">
+        SELECT DISTINCT d.tenant_code
+          FROM customer_tag_def d
+         WHERE d.is_deleted = FALSE
+           AND d.is_enabled = TRUE
+           AND d.tag_type = 2
+           AND d.rule_metric IS NOT NULL
+           AND d.rule_op IS NOT NULL
+           AND d.rule_value IS NOT NULL
+    </select>
+</mapper>

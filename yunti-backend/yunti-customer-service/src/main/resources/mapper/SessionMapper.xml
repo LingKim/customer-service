@@ -19,6 +19,7 @@
                s.end_time      AS end_time,
                c.name          AS customer_name,
                c.level         AS customer_level,
+               c.customer_no   AS customer_no,
                lm.content      AS last_content,
                lm.sender_type  AS last_sender_type,
                lm.send_time    AS last_time,
@@ -521,5 +522,121 @@
           ) feed
          ORDER BY event_time DESC
          LIMIT #{limit}
+    </select>
+
+    <!-- 客户 360：一批客户的会话统计（一次查完，客户列表不再逐个客户数会话） -->
+    <select id="selectCustomerSessionStats" resultType="java.util.Map">
+        SELECT s.customer_id               AS customer_id,
+               COUNT(1)                    AS session_count,
+               MAX(s.create_time)          AS last_session_at,
+               COUNT(1) FILTER (WHERE s.agent_id IS NOT NULL) AS human_count,
+               COUNT(1) FILTER (WHERE s.status = 4)           AS closed_count,
+               COUNT(1) FILTER (WHERE s.status IN (1, 3))     AS open_count
+          FROM session s
+         WHERE s.tenant_code = #{tenantCode}
+           AND s.is_deleted = FALSE
+           AND s.customer_id IN
+           <foreach collection="customerIds" item="id" open="(" separator="," close=")">
+               #{id}
+           </foreach>
+         GROUP BY s.customer_id
+    </select>
+    <!-- 客户 360：每个客户最近一次会话（DISTINCT ON 取最新那条，意图/情绪直接展示） -->
+    <select id="selectCustomerLatestSessions" resultType="java.util.Map">
+        SELECT DISTINCT ON (s.customer_id)
+               s.customer_id  AS customer_id,
+               s.session_no   AS session_no,
+               s.status       AS status,
+               s.intent       AS intent,
+               s.emotion      AS emotion,
+               s.source       AS source,
+               s.create_time  AS create_time,
+               s.end_time     AS end_time
+          FROM session s
+         WHERE s.tenant_code = #{tenantCode}
+           AND s.is_deleted = FALSE
+           AND s.customer_id IN
+           <foreach collection="customerIds" item="id" open="(" separator="," close=")">
+               #{id}
+           </foreach>
+         ORDER BY s.customer_id, s.create_time DESC, s.id DESC
+    </select>
+    <!-- 客户 360 · 会话轨迹：这个客户的全部会话（倒序），带坐席姓名、消息数、是否转工单 -->
+    <select id="selectSessionsOfCustomer" resultType="java.util.Map">
+        SELECT s.session_no       AS session_no,
+               s.status           AS status,
+               s.channel_id       AS channel_id,
+               s.agent_id         AS agent_id,
+               s.intent           AS intent,
+               s.emotion          AS emotion,
+               s.bot_transfer_reason AS bot_transfer_reason,
+               s.source           AS source,
+               s.start_time       AS start_time,
+               s.end_time         AS end_time,
+               s.csat_score       AS csat_score,
+               s.create_time      AS create_time,
+               ch.name            AS channel_name,
+               COALESCE(mc.msg_count, 0) AS msg_count,
+               tk.ticket_no       AS ticket_no,
+               tk.ticket_status   AS ticket_status
+          FROM session s
+          LEFT JOIN channel ch
+                 ON ch.id = s.channel_id
+          LEFT JOIN LATERAL (
+                SELECT COUNT(1) AS msg_count
+                  FROM session_message m
+                 WHERE m.tenant_code = s.tenant_code
+                   AND m.session_id = s.id
+                   AND m.is_deleted = FALSE
+               ) mc ON TRUE
+          LEFT JOIN LATERAL (
+                SELECT t.ticket_no, t.status AS ticket_status
+                  FROM ticket t
+                 WHERE t.tenant_code = s.tenant_code
+                   AND t.session_no = s.session_no
+                   AND t.is_deleted = FALSE
+                 ORDER BY t.id DESC
+                 LIMIT 1
+               ) tk ON TRUE
+         WHERE s.tenant_code = #{tenantCode}
+           AND s.customer_id = #{customerId}
+           AND s.is_deleted = FALSE
+         ORDER BY s.create_time DESC, s.id DESC
+         LIMIT #{limit}
+    </select>
+    <!-- 客户 360 · 概览数字：一次查完（当月新增 / 近 7 天活跃 / 风险 / 打过标签的） -->
+    <select id="selectCustomerOverview" resultType="java.util.Map">
+        SELECT COUNT(1)                                          AS total,
+               COUNT(1) FILTER (WHERE c.create_time >= #{monthStart})  AS month_new,
+               COUNT(1) FILTER (WHERE c.last_active >= #{activeSince}) AS active_7d,
+               COUNT(1) FILTER (WHERE c.risk_level >= 2)               AS risk_count,
+               COUNT(1) FILTER (WHERE c.level >= 3)                    AS vip_count,
+               COUNT(1) FILTER (WHERE EXISTS (
+                     SELECT 1 FROM customer_tag t
+                      WHERE t.tenant_code = c.tenant_code
+                        AND t.customer_id = c.id
+                        AND t.is_deleted = FALSE
+               ))                                                      AS tagged_count,
+               COALESCE(SUM(c.total_value), 0)                         AS total_value
+          FROM customer c
+         WHERE c.tenant_code = #{tenantCode}
+           AND c.is_deleted = FALSE
+    </select>
+    <!-- 客户 360 · 规则标签：一个客户在窗口内的会话类指标（退款 / 投诉 / 夜间咨询） -->
+    <select id="selectCustomerRuleMetrics" resultType="java.util.Map">
+        SELECT COUNT(1) AS session_count,
+               COUNT(1) FILTER (WHERE s.intent ILIKE '%退款%'
+                                    OR s.intent ILIKE '%退货%'
+                                    OR s.intent ILIKE '%售后%')                AS refund_sessions,
+               COUNT(1) FILTER (WHERE s.intent ILIKE '%投诉%'
+                                    OR s.emotion IN ('不满', '愤怒'))           AS complaint_sessions,
+               COUNT(1) FILTER (WHERE EXTRACT(HOUR FROM s.start_time) >= 22
+                                    OR EXTRACT(HOUR FROM s.start_time) &lt; 6)    AS night_sessions
+          FROM session s
+         WHERE s.tenant_code = #{tenantCode}
+           AND s.customer_id = #{customerId}
+           AND s.is_deleted = FALSE
+           AND (CAST(#{windowDays} AS INTEGER) &lt;= 0
+                OR s.start_time >= now() - make_interval(days =&gt; CAST(#{windowDays} AS INTEGER)))
     </select>
 </mapper>
