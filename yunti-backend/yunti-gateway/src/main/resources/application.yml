@@ -23,6 +23,12 @@ spring:
               uri: ${YUNTI_TENANT_SERVICE_URL:http://127.0.0.1:9092}
               predicates:
                 - Path=/api/tenant/**
+            # 平台侧接口（目前是"支持工单"）：也是 customer-service 提供的，
+            # 但按"平台视角"单独开一条前缀，方便以后给平台接口统一加鉴权/限流
+            - id: yunti-platform-api
+              uri: ${YUNTI_CUSTOMER_SERVICE_URL:http://127.0.0.1:9093}
+              predicates:
+                - Path=/api/platform/**
             - id: yunti-customer-service
               uri: ${YUNTI_CUSTOMER_SERVICE_URL:http://127.0.0.1:9093}
               predicates:

@@ -26,6 +26,11 @@ export default defineConfig(({ mode }) => {
           target: apiTarget,
           changeOrigin: true,
         },
+        // 平台侧接口（支持工单）：同样走网关，网关再转给 customer-service
+        '/api/platform': {
+          target: apiTarget,
+          changeOrigin: true,
+        },
         '/api/ai': {
           target: apiTarget,
           changeOrigin: true,

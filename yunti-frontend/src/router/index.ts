@@ -48,6 +48,12 @@ const router = createRouter({
           meta: { title: '企业审核', requiresPlatform: true },
         },
         {
+          path: 'platform/support',
+          name: 'PlatformSupportTickets',
+          component: () => import('../views/platform/support/index.vue'),
+          meta: { title: '支持工单', requiresPlatform: true },
+        },
+        {
           path: 'channels',
           name: 'Channels',
           component: () => import('../views/channels/index.vue'),
@@ -100,6 +106,12 @@ const router = createRouter({
           name: 'Workspace',
           component: () => import('../views/workspace/index.vue'),
           meta: { title: '在线客服', requiresEnterprise: true },
+        },
+        {
+          path: 'modules/tickets',
+          name: 'Tickets',
+          component: () => import('../views/tickets/index.vue'),
+          meta: { title: '工单中心', requiresEnterprise: true },
         },
       ],
     },

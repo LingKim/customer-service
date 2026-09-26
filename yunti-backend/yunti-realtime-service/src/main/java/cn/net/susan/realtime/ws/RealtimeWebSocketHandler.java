@@ -314,6 +314,41 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
     }
 
     /**
+     * 工单提醒：分派通知与 SLA 预警都走它（由 customer-service 调用）。
+     *
+     * <p>工单不像会话那样有"订阅关系"，所以按人来发：有处理人就发给他；
+     * 没人认领（assigneeId 为空）就发给全租户的坐席连接——没主的工单超时了，
+     * 光在列表里变红是没人看的。</p>
+     *
+     * @return 实际送达的连接数
+     */
+    public int notifyTicketAlert(String tenantCode, Long assigneeId, Map<String, Object> payload) {
+        if (tenantCode == null || tenantCode.isBlank()) {
+            return 0;
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        if (payload != null) {
+            data.putAll(payload);
+        }
+        RealtimeMessage message = RealtimeMessage.withData("TICKET_ALERT", "", data);
+        int delivered = 0;
+        for (ConnectionRegistry.Client client : registry.agentClients(tenantCode)) {
+            if (client.principal().isVisitor()) {
+                continue;
+            }
+            // 有处理人就只发给他；没人认领就发给全租户坐席——超时的工单不能被"没人负责"吞掉
+            if (assigneeId != null && client.principal().id() != assigneeId) {
+                continue;
+            }
+            send(client.socket(), message);
+            delivered++;
+        }
+        log.info("推送工单提醒 tenant={} assigneeId={} 送达连接数={}",
+                tenantCode, assigneeId == null ? "（未认领→全体坐席）" : assigneeId, delivered);
+        return delivered;
+    }
+
+    /**
      * 通知某个坐席"这条会话分给你了"（智能路由自动接入时由 customer-service 调用）。
      *
      * <p>路由分配发生在 customer-service，不经过长连接，所以要反向通知一次，

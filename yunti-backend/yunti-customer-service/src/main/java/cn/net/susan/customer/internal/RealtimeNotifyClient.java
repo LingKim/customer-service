@@ -54,6 +54,31 @@ public class RealtimeNotifyClient {
     }
 
     /**
+     * 工单提醒：分派通知与 SLA 预警都走它。
+     *
+     * <p>发给谁：工单有处理人就发给处理人，没人认领（assigneeId 为空）就发给全租户的坐席连接——
+     * 没人认领的工单超时了，光在列表里变红是没人看的。</p>
+     */
+    public void notifyTicketAlert(String tenantCode, Long assigneeId, Map<String, Object> payload) {
+        try {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("tenantCode", tenantCode);
+            body.put("assigneeId", assigneeId);
+            body.put("payload", payload);
+            restClient.post()
+                    .uri("/api/realtime/internal/ticket-alert")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (Exception e) {
+            // 提醒推不出去不影响工单本身：页面上还有角标和列表
+            log.warn("推送工单提醒失败 tenant={} assigneeId={} error={}",
+                    tenantCode, assigneeId, e.getMessage());
+        }
+    }
+
+    /**
      * 通知坐席已被自动分配会话；失败只记日志，不影响主流程。
      */
     public void notifyAssigned(String tenantCode, long agentId, String sessionNo, String reason) {

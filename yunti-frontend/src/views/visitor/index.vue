@@ -737,10 +737,9 @@ async function stageImage(file: File, appKey: string) {
       visitorToken: visitorToken.value,
       file,
     })
-    // 上传是异步的：这期间客户可能已经把这张移除了，认"还在不在列表里"，别认变量
-    if (pendingImages.value.includes(item)) {
-      item.uploaded = uploaded
-    }
+    // 按数组里的响应式对象更新；上传期间客户可能已移除该图片。
+    const staged = pendingImages.value.find((row) => row.previewUrl === previewUrl)
+    if (staged) staged.uploaded = uploaded
   } catch (e) {
     removePendingImage(item)
     const reason = e instanceof Error ? e.message : '请重试'

@@ -54,7 +54,8 @@ public class SchemaGuard implements ApplicationRunner {
             "customer_db_qa_timeout.sql",
             "customer_db_kb.sql",
             "customer_db_bot_brain.sql",
-            "customer_db_chat_image.sql"
+            "customer_db_chat_image.sql",
+            "customer_db_ticket.sql"
     );
 
     /** 代码依赖的表 → 来源脚本 */
@@ -102,6 +103,9 @@ public class SchemaGuard implements ApplicationRunner {
         REQUIRED_TABLES.put("kb_chunk", "customer_db_kb.sql");
         REQUIRED_TABLES.put("kb_document", "customer_db_kb.sql");
         REQUIRED_TABLES.put("kb_category", "customer_db_kb.sql");
+        REQUIRED_TABLES.put("ticket_sla_rule", "customer_db_ticket.sql");
+        REQUIRED_TABLES.put("notification", "customer_db_ticket.sql");
+        REQUIRED_TABLES.put("notification_read", "customer_db_ticket.sql");
 
         REQUIRED_COLUMNS.put("channel.allowed_origins", "customer_db_security.sql");
         REQUIRED_COLUMNS.put("session.last_msg_seq", "customer_db_delivery.sql");
@@ -117,6 +121,13 @@ public class SchemaGuard implements ApplicationRunner {
         REQUIRED_COLUMNS.put("kb_document.chunk_count", "customer_db_kb.sql");
         REQUIRED_COLUMNS.put("kb_document.index_status", "customer_db_kb.sql");
         REQUIRED_COLUMNS.put("session.bot_transfer_reason", "customer_db_bot_brain.sql");
+        REQUIRED_COLUMNS.put("ticket.session_no", "customer_db_ticket.sql");
+        REQUIRED_COLUMNS.put("ticket.first_response_due", "customer_db_ticket.sql");
+        REQUIRED_COLUMNS.put("ticket.resolve_due", "customer_db_ticket.sql");
+        REQUIRED_COLUMNS.put("ticket.sla_alerted", "customer_db_ticket.sql");
+        REQUIRED_COLUMNS.put("ticket.source_channel", "customer_db_ticket.sql");
+        REQUIRED_COLUMNS.put("ticket_event.operator_name", "customer_db_ticket.sql");
+        REQUIRED_COLUMNS.put("ticket_sla_rule.first_response_minutes", "customer_db_ticket.sql");
 
         REQUIRED_MIN_LENGTH.put("file_meta.mime_type", 128);
 
@@ -124,6 +135,12 @@ public class SchemaGuard implements ApplicationRunner {
         REQUIRED_CONSTRAINTS.put("ck_file_meta_biz_type",
                 new ConstraintRule("5", "customer_db_chat_image.sql",
                         "file_meta.biz_type 允许 5-聊天图片"));
+        REQUIRED_CONSTRAINTS.put("ck_ticket_status",
+                new ConstraintRule("5", "customer_db_ticket.sql", "ticket.status 允许 5-已关闭"));
+        REQUIRED_CONSTRAINTS.put("ck_ticket_event_event_type",
+                new ConstraintRule("8", "customer_db_ticket.sql", "ticket_event.event_type 允许 8-SLA预警"));
+        REQUIRED_CONSTRAINTS.put("ck_ticket_source_channel",
+                new ConstraintRule("5", "customer_db_ticket.sql", "ticket.source_channel 允许 5-其它"));
     }
 
     private final SchemaMapper schemaMapper;

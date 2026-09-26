@@ -190,6 +190,11 @@
               <el-button v-if="!isClosed" size="small" type="danger" plain @click="openClose">
                 结束会话
               </el-button>
+              <!-- 会话转工单：解决不了的事转出去，工单中心跟到底（带上会话号与上下文） -->
+              <el-button size="small" type="primary" plain @click="openTicket">
+                <el-icon :size="13"><Tickets /></el-icon>
+                转工单
+              </el-button>
             </div>
           </div>
           <div v-if="pendingQaAlerts" class="qa-banner">
@@ -451,6 +456,7 @@
 </template>
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   ChatDotRound,
   Clock,
@@ -462,6 +468,7 @@ import {
   Refresh,
   Search,
   Service,
+  Tickets,
   Warning,
   WarningFilled,
 } from '@element-plus/icons-vue'
@@ -491,6 +498,8 @@ import { listColleagues, type ColleagueOption } from '../../api/member'
 import { getToken } from '../../utils/auth'
 import { useUserStore } from '../../stores/user'
 import { RealtimeClient, type RealtimeMessage, type RealtimeState } from '../../utils/realtime'
+
+const router = useRouter()
 
 const userStore = useUserStore()
 
@@ -931,6 +940,30 @@ async function handleMessage(message: RealtimeMessage) {
     case 'QA_ALERT': {
       // 实时质检命中：客户/客服刚发的那句话踩到规则了
       onQaAlert((message.data ?? {}) as { alert?: QaAlertItem })
+      break
+    }
+    case 'TICKET_ALERT': {
+      // 工单提醒：被分派 / SLA 即将超时 / 已超时（没人认领时全租户坐席都会收到）
+      const payload = (message.data ?? {}) as {
+        ticketNo?: string
+        title?: string
+        text?: string
+        priorityText?: string
+        slaState?: number
+        slaStateText?: string
+      }
+      if (!payload.ticketNo) {
+        break
+      }
+      ElNotification({
+        title: `工单提醒 · ${payload.slaStateText || '待处理'}`,
+        message: `${payload.text || payload.title || payload.ticketNo}`,
+        type: payload.slaState === 3 ? 'error' : payload.slaState === 2 ? 'warning' : 'info',
+        duration: 10000,
+        onClick: () => {
+          void router.push('/modules/tickets')
+        },
+      })
       break
     }
     case 'CONNECTED': {
@@ -1421,6 +1454,31 @@ function transfer() {
 function openClose() {
   closeRemark.value = ''
   closeVisible.value = true
+}
+
+/**
+ * 会话转工单：跳到工单中心并带上会话号与最近一句客户消息。
+ *
+ * <p>为什么走路由 query 而不是就地弹窗：工单的字段（分类、优先级、处理人、SLA）比较多，
+ * 放在工单中心那个页面里更顺手；带过去的三个参数够预填标题和描述了，
+ * 后端的"会话转单"还会把来源会话与最近对话摘要一起写进工单。</p>
+ */
+function openTicket() {
+  const sessionNo = activeSessionNo.value
+  if (!sessionNo) {
+    ElMessage.warning('先选中一条会话再转工单')
+    return
+  }
+  const customer = activeSession.value?.customerName || '客户'
+  const lastCustomerMessage = [...messages.value].reverse().find((item) => item.senderType === 1)
+  void router.push({
+    path: '/modules/tickets',
+    query: {
+      sessionNo,
+      title: `${customer} 的咨询`,
+      content: lastCustomerMessage ? messageTextOf(lastCustomerMessage).slice(0, 200) : '',
+    },
+  })
 }
 
 function closeSession() {

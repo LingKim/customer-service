@@ -7,10 +7,12 @@ import cn.net.susan.common.exception.BizException;
 import cn.net.susan.user.security.JwtService;
 import cn.net.susan.user.entity.SysUser;
 import cn.net.susan.user.mapper.SysUserMapper;
+import cn.net.susan.user.service.MemberInviteService;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -21,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -35,10 +39,16 @@ public class UserInternalController {
 
     private final SysUserMapper sysUserMapper;
     private final JwtService jwtService;
+    private final MemberInviteService memberInviteService;
+    private final String internalSharedSecret;
 
-    public UserInternalController(SysUserMapper sysUserMapper, JwtService jwtService) {
+    public UserInternalController(SysUserMapper sysUserMapper, JwtService jwtService,
+                                  MemberInviteService memberInviteService,
+                                  @Value("${yunti.internal.shared-secret:}") String internalSharedSecret) {
         this.sysUserMapper = sysUserMapper;
         this.jwtService = jwtService;
+        this.memberInviteService = memberInviteService;
+        this.internalSharedSecret = internalSharedSecret;
     }
 
     /**
@@ -76,6 +86,26 @@ public class UserInternalController {
             throw new BizException(40001, "用户租户归属已发生变化");
         }
         return ApiResponse.ok();
+    }
+
+    /**
+     * 查询用户在某租户下的角色编码（内部接口：customer-service 判工单权限用）。
+     *
+     * <p>走内部接口而不是转发调用方的令牌：服务间调用不该依赖租户侧的登录态，
+     * 也避免把用户令牌在多个服务之间传来传去。</p>
+     */
+    @GetMapping("/users/{userId}/roles")
+    public ApiResponse<List<String>> userRoles(
+            @RequestHeader(value = "X-Yunti-Internal-Secret", required = false) String internalSecret,
+            @PathVariable long userId,
+            @RequestParam String tenantCode
+    ) {
+        if (internalSharedSecret == null || internalSharedSecret.isBlank() || internalSecret == null
+                || !MessageDigest.isEqual(internalSharedSecret.getBytes(StandardCharsets.UTF_8),
+                        internalSecret.getBytes(StandardCharsets.UTF_8))) {
+            throw new BizException(ResultCode.FORBIDDEN);
+        }
+        return ApiResponse.ok(memberInviteService.roleCodesOf(tenantCode, userId));
     }
 
     /**

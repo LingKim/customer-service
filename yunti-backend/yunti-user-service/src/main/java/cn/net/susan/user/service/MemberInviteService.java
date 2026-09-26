@@ -142,6 +142,33 @@ public class MemberInviteService {
     }
 
     /**
+     * 某个用户在某租户下的角色编码（内部接口：customer-service 判工单权限用）。
+     *
+     * <p>口径和 {@link #memberAccess(LoginUser)} 保持一致：没配角色的老租户返回空集合，
+     * 调用方按"老账号 = 企业管理员"兼容；平台租户也返回空集合。</p>
+     */
+    public List<String> roleCodesOf(String tenantCode, long userId) {
+        if (tenantCode == null || tenantCode.isBlank() || AuthConstants.TENANT_CODE_PLATFORM.equals(tenantCode)) {
+            return List.of();
+        }
+        List<SysUserRole> relations = sysUserRoleMapper.selectList(
+                Wrappers.<SysUserRole>lambdaQuery()
+                        .eq(SysUserRole::getTenantCode, tenantCode)
+                        .eq(SysUserRole::getUserId, userId));
+        if (relations.isEmpty()) {
+            return List.of();
+        }
+        List<SysRole> roles = sysRoleMapper.selectBatchIds(
+                relations.stream().map(SysUserRole::getRoleId).distinct().toList());
+        return roles.stream()
+                .filter(role -> Boolean.FALSE.equals(role.getDeleted()))
+                .filter(role -> role.getRoleCode() != null && !role.getRoleCode().isBlank())
+                .map(SysRole::getRoleCode)
+                .distinct()
+                .toList();
+    }
+
+    /**
      * 企业成员列表；返回前补全当前管理员的默认角色/成员关系，保证列表口径完整。
      */
     @Transactional

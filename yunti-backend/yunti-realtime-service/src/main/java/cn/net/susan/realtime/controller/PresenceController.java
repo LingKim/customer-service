@@ -136,6 +136,22 @@ public class PresenceController {
     }
 
     /**
+     * 内部接口：工单提醒（分派 / SLA 即将超时 / 已超时）。
+     *
+     * <p>和质检预警不同，工单没有"会话订阅关系"，所以按**人**投递：
+     * 有处理人发给处理人，没人认领就发给全租户坐席。</p>
+     */
+    @PostMapping("/internal/ticket-alert")
+    public ApiResponse<Map<String, Object>> ticketAlert(@RequestBody TicketAlertBody body) {
+        int delivered = handler.notifyTicketAlert(body.tenantCode(), body.assigneeId(), body.payload());
+        return ApiResponse.ok(Map.of("delivered", delivered));
+    }
+
+    /** 工单提醒请求体 */
+    public record TicketAlertBody(String tenantCode, Long assigneeId, Map<String, Object> payload) {
+    }
+
+    /**
      * 内部接口：customer-service 落了一条"机器人回复 / 系统提示"后调用，让长连接广播出去。
      *
      * <p>机器人回复不是从前端长连接发起的，长连接手里没有这条消息；
