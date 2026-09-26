@@ -36,6 +36,23 @@ CREATE TABLE IF NOT EXISTS skill_group (
   PRIMARY KEY (id), CONSTRAINT uk_skill_group_tenant_name UNIQUE (tenant_code, name)
 );
 
+CREATE TABLE IF NOT EXISTS skill_group_member (
+  id BIGINT NOT NULL,
+  tenant_code VARCHAR(16) NOT NULL,
+  skill_group_id BIGINT NOT NULL,
+  user_id BIGINT NOT NULL,
+  is_leader BOOLEAN NOT NULL DEFAULT FALSE,
+  status SMALLINT NOT NULL DEFAULT 1,
+  create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  creator VARCHAR(64), editor VARCHAR(64), is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+  CONSTRAINT ck_skill_group_member_status CHECK (status IN (1, 2)),
+  PRIMARY KEY (id), CONSTRAINT uk_skill_group_member UNIQUE (skill_group_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_group_member_tenant
+  ON skill_group_member (tenant_code, skill_group_id);
+
 CREATE TABLE IF NOT EXISTS agent_status (
   id BIGINT NOT NULL,
   tenant_code VARCHAR(16) NOT NULL,

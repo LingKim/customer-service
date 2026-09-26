@@ -69,6 +69,11 @@ bash scripts/bootstrap.sh     # 一键创建 .venv 并安装依赖
 
 ## 完整 AI 能力
 
+### DeepSeek 文本模型
+
+将密钥放在环境变量 `YUNTI_AI_DEEPSEEK_API_KEY`，模型设置为 `YUNTI_AI_DEEPSEEK_MODEL=deepseek-flash`。DeepSeek 接口中 `deepseek-flash` 的显示名称是 DeepSeek-V4.1-Flash。本机已有的 `DEEK_SEEK_KET` 也会作为密钥变量的兼容别名读取；正式配置建议使用标准变量名。不要将真实密钥写入 `.env.example` 或提交到仓库。
+
+
 安装可选依赖后可启用真实 Agent/RAG：
 
 改成：

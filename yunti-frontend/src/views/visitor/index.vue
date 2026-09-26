@@ -1252,11 +1252,6 @@ function msgTime(value?: string | null) {
   text-align: center;
 }
 
-  font-size: 11px;
-  color: #94a3b8;
-  margin-bottom: 3px;
-}
-
 .v-time {
   margin-top: 4px;
   font-size: 11px;

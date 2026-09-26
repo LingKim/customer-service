@@ -49,9 +49,9 @@ public class UserRoleClient {
         }
         try {
             ApiResponse<List<String>> response = restClient.get()
-                    .header("X-Yunti-Internal-Secret", sharedSecret)
                     .uri("/api/user/internal/users/{userId}/roles?tenantCode={tenant}",
                             userId, tenantCode)
+                    .header("X-Yunti-Internal-Secret", sharedSecret)
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {
                     });

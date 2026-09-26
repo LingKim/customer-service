@@ -16,6 +16,12 @@ export interface ChannelResult {
   createTime?: string
 }
 
+export const channelTypeText: Record<number, string> = {
+  1: '网站在线客服',
+  2: '微信公众号',
+  3: '微信小程序',
+}
+
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
 const MOCK_KEY = 'yunti_mock_channels'
 

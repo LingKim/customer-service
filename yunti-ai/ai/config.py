@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -26,9 +26,12 @@ class Settings(BaseSettings):
     qwen_vl_model: str = "qwen-vl-plus"
     vision_max_images: int = 3
     vision_max_image_mb: int = 6
-    deepseek_api_key: str = ""
+    deepseek_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("YUNTI_AI_DEEPSEEK_API_KEY", "DEEK_SEEK_KET"),
+    )
     deepseek_base_url: str = "https://api.deepseek.com/v1"
-    deepseek_model: str = "deepseek-chat"
+    deepseek_model: str = "deepseek-flash"
 
     # 向量化（知识库用）：默认走千问的 OpenAI 兼容 /embeddings 接口。
     # 不配 embedding_api_key 时自动降级为"本地哈希向量"——只能把链路跑通，语义效果差。

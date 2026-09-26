@@ -13,7 +13,7 @@
         text-color="#8a97ad"
         active-text-color="#ffffff"
       >
-        <el-menu-item index="/dashboard">
+        <el-menu-item v-if="userStore.userType === 2" index="/dashboard">
           <el-icon><DataBoard /></el-icon>
           <span>数据概览</span>
         </el-menu-item>
@@ -68,7 +68,7 @@
     <el-container>
       <el-header class="admin-header">
         <el-breadcrumb separator="/">
-          <el-breadcrumb-item :to="{ path: '/dashboard' }">首页</el-breadcrumb-item>
+          <el-breadcrumb-item :to="{ path: userStore.userType === 1 ? '/admin/reviews' : '/dashboard' }">首页</el-breadcrumb-item>
           <el-breadcrumb-item>{{ $route.meta.title || '工作台' }}</el-breadcrumb-item>
         </el-breadcrumb>
         <div class="admin-user">

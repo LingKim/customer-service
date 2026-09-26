@@ -27,6 +27,7 @@ DEFAULT_INTENTS = (
 )
 DEFAULT_MODELS = (
     ("qwen-plus", "千问 Plus", "qwen", 1, 0.35),
+    ("deepseek-flash", "DeepSeek-V4.1-Flash", "deepseek", 1, 0.30),
     ("deepseek-chat", "DeepSeek Chat", "deepseek", 1, 0.30),
     ("qwen-vl-plus", "千问 VL", "qwen", 2, 0.20),
 )
@@ -78,7 +79,7 @@ def require_bot_tenant(
     try:
         claims = jwt.decode(
             authorization[7:].strip(), get_settings().jwt_secret,
-            algorithms=["HS256"], options={"require": ["exp", "sub"]},
+            algorithms=["HS256", "HS384", "HS512"], options={"require": ["exp", "sub"]},
         )
     except jwt.InvalidTokenError as exc:
         raise HTTPException(status_code=401, detail="登录令牌无效") from exc

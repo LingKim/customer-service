@@ -85,18 +85,6 @@ public class AgentInternalController {
         return ApiResponse.ok(realtimeQaService.scanUnansweredSessions());
     }
 
-    /**
-     * 手动触发一次"响应超时"扫描（排障用）。
-     *
-     * <p>想知道"为什么没提醒"就调它：返回本轮扫到多少条"客户在等"的会话、
-     * 实际新增多少条提醒。scanned 一直是 0 说明扫描条件没命中（比如坐席最后说过话、
-     * 或者会话不在接待/排队状态）；scanned 有值但 alerted 是 0，说明还没到超时阈值。</p>
-     */
-    @PostMapping("/qa-timeout/run")
-    public ApiResponse<RealtimeQaService.TimeoutScanResult> runTimeoutScan() {
-        return ApiResponse.ok(realtimeQaService.scanUnansweredSessions());
-    }
-
     /** 上下线请求体 */
     public record ConnectionBody(
             @NotBlank(message = "缺少租户编码")

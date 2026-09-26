@@ -5,6 +5,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.util.List;
 import java.util.Map;
@@ -15,6 +17,17 @@ public class UserNameClient {
 
     public UserNameClient(@Value("${yunti.user.internal-base-url}") String baseUrl) {
         restClient = RestClient.builder().baseUrl(baseUrl).build();
+    }
+
+    public Map<String, String> namesOf(List<String> userIds) {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes request)) {
+            return Map.of();
+        }
+        String authorization = request.getRequest().getHeader("Authorization");
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            return Map.of();
+        }
+        return namesOf(userIds, authorization);
     }
 
     public Map<String, String> namesOf(List<String> userIds, String authorization) {

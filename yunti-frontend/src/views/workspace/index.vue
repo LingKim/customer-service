@@ -600,10 +600,18 @@ const isClosed = computed(() => activeSession.value?.status === 4)
 const isMine = computed(
   () => !!activeSession.value?.agentId && String(activeSession.value.agentId) === String(userStore.userId),
 )
-const myCount = computed(
-  () => sessions.value.filter((item) => String(item.agentId) === String(userStore.userId)).length,
-)
-const queueCount = computed(() => sessions.value.filter((item) => !item.agentId).length)
+const myCount = ref(0)
+const queueCount = ref(0)
+
+async function loadWorkload() {
+  try {
+    const summary = await fetchSessionWorkload()
+    myCount.value = summary.mine
+    queueCount.value = summary.queue
+  } catch {
+    // 计数接口不可用时保留上次成功的结果，列表请求仍可独立完成。
+  }
+}
 const scopeLabel = computed(() => {
   if (scope.value === 'queue') {
     return '待接待'

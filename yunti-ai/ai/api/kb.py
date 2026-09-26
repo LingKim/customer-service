@@ -215,7 +215,7 @@ def _vector_quality(tenant_code: str | None = None) -> dict:
                 """
                 SELECT COALESCE(embedding_model, 'null') AS model, COUNT(1) AS chunks
                   FROM kb_chunk
-                 WHERE (%s IS NULL OR tenant_code = %s)
+                 WHERE (%s::varchar IS NULL OR tenant_code = %s)
                  GROUP BY COALESCE(embedding_model, 'null')
                  ORDER BY chunks DESC
                 """, (tenant_code, tenant_code)
@@ -236,7 +236,7 @@ def _vector_quality(tenant_code: str | None = None) -> dict:
                         SELECT DISTINCT doc_id
                           FROM kb_chunk
                          WHERE embedding_model = 'local-hash'
-                           AND (%s IS NULL OR tenant_code = %s)
+                           AND (%s::varchar IS NULL OR tenant_code = %s)
                          ORDER BY doc_id
                         """, (tenant_code, tenant_code)
                     ).fetchall()

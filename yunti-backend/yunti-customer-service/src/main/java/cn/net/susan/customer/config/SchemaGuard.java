@@ -98,6 +98,7 @@ public class SchemaGuard implements ApplicationRunner {
 
     static {
         REQUIRED_TABLES.put("agent_status", "customer_db_routing.sql");
+        REQUIRED_TABLES.put("skill_group_member", "customer_db_routing.sql");
         REQUIRED_TABLES.put("qa_rule", "customer_db_qa.sql");
         REQUIRED_TABLES.put("qa_task", "customer_db_qa.sql");
         REQUIRED_TABLES.put("qa_review", "customer_db_qa.sql");

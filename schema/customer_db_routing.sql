@@ -1,7 +1,8 @@
 -- 坐席状态与智能路由（可重复执行）：
 --   1. 新增 agent_status：坐席在线/忙碌/小休 + 最多同时接待几单；
 --   2. skill_group 补 overflow_after_seconds：排队超过这个秒数就升级（放宽技能组限制）；
---   3. 补两个路由要用的索引。
+--   3. 补 skill_group_member：技能组坐席绑定；
+--   4. 补路由所需索引。
 
 CREATE TABLE IF NOT EXISTS "agent_status" (
   "id" BIGINT NOT NULL,
@@ -34,6 +35,26 @@ ALTER TABLE "agent_status" ADD COLUMN IF NOT EXISTS "is_connected" BOOLEAN NOT N
 
 ALTER TABLE "skill_group"
     ADD COLUMN IF NOT EXISTS "overflow_after_seconds" INTEGER NOT NULL DEFAULT 60;
+
+CREATE TABLE IF NOT EXISTS "skill_group_member" (
+  "id" BIGINT NOT NULL,
+  "tenant_code" VARCHAR(16) NOT NULL,
+  "skill_group_id" BIGINT NOT NULL,
+  "user_id" BIGINT NOT NULL,
+  "is_leader" BOOLEAN NOT NULL DEFAULT FALSE,
+  "status" SMALLINT NOT NULL DEFAULT 1,
+  "create_time" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "update_time" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "creator" VARCHAR(64),
+  "editor" VARCHAR(64),
+  "is_deleted" BOOLEAN NOT NULL DEFAULT FALSE,
+  CONSTRAINT ck_skill_group_member_status CHECK ("status" IN (1, 2)),
+  PRIMARY KEY ("id"),
+  CONSTRAINT uk_skill_group_member UNIQUE ("skill_group_id", "user_id")
+);
+
+CREATE INDEX IF NOT EXISTS "idx_skill_group_member_tenant"
+    ON "skill_group_member" ("tenant_code", "skill_group_id");
 
 COMMENT ON COLUMN "skill_group"."overflow_after_seconds"
     IS '排队超过这个秒数就升级：放宽技能组限制，交给其它在线坐席（0 表示不升级）';

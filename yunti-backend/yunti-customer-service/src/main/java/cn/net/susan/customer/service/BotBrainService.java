@@ -255,9 +255,9 @@ public class BotBrainService {
     }
 
     /** 真正跑一轮大脑并把结果落到会话上。 */
-    private void reply(String tenantCode, Session session, SessionService sessions) {
+    private void reply(String tenantCode, Session session, SessionService sessions, String extraContext) {
         String sessionNo = session.getSessionNo();
-        List<Map<String, String>> messages = buildHistory(tenantCode, sessionNo, sessions);
+        List<Map<String, String>> messages = buildHistory(tenantCode, sessionNo, sessions, extraContext);
         if (messages.isEmpty() || !"user".equals(messages.get(messages.size() - 1).get("role"))) {
             // 同一时刻多条客户消息可能排入多个任务；前一任务回复后，后续任务
             // 看到最后一条已是机器人消息，就不再重复回答同一个问题。

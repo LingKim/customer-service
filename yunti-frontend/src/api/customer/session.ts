@@ -23,6 +23,15 @@ export interface SessionItem {
   msgCount?: number | null
 }
 
+export interface SessionWorkload {
+  mine: number
+  queue: number
+}
+
+export function fetchSessionWorkload(): Promise<SessionWorkload> {
+  return request({ url: '/customer/sessions/summary', method: 'get' })
+}
+
 /** 一条消息里的一张图（多张时挂在 `images` 里） */
 export interface ChatImageItem {
   fileId?: string

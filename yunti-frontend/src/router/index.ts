@@ -33,7 +33,7 @@ const router = createRouter({
           path: 'dashboard',
           name: 'Dashboard',
           component: () => import('../views/dashboard/index.vue'),
-          meta: { title: '数据概览' },
+          meta: { title: '数据概览', requiresEnterprise: true },
         },
         {
           path: 'enterprise',
@@ -164,7 +164,7 @@ router.beforeEach(async (to) => {
     if (!userStore.userId) {
       try { await userStore.fetchProfile() } catch { return { name: 'Login' } }
     }
-    if (userStore.userType !== 2) return { name: 'Dashboard' }
+    if (userStore.userType !== 2) return { name: 'PlatformReview' }
     if (!userStore.tenantCode || userStore.tenantCode === 'PLATFORM') return { name: 'Guide' }
   }
   if (to.meta.requiresManager || to.name === 'Guide') {
@@ -172,6 +172,7 @@ router.beforeEach(async (to) => {
     if (!userStore.userId) {
       try { await userStore.fetchProfile() } catch { return { name: 'Login' } }
     }
+    if (to.name === 'Guide' && userStore.userType === 1) return { name: 'PlatformReview' }
     if (userStore.userType === 2 && userStore.tenantCode !== 'PLATFORM') {
       try {
         const access = await fetchMemberAccess()
