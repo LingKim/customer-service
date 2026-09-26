@@ -9,4 +9,12 @@
         SELECT table_name || '.' || column_name
           FROM information_schema.columns
          WHERE table_schema = current_schema()
-    </select></mapper>
+    </select>
+    <select id="selectColumnLengths" resultType="java.util.Map">
+        SELECT table_name || '.' || column_name AS column_key,
+               character_maximum_length AS max_length
+          FROM information_schema.columns
+         WHERE table_schema = current_schema()
+           AND character_maximum_length IS NOT NULL
+    </select>
+</mapper>

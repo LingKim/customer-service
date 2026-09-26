@@ -27,6 +27,21 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_model: str = "deepseek-chat"
 
+    # 向量化（知识库用）：默认走千问的 OpenAI 兼容 /embeddings 接口。
+    # 不配 embedding_api_key 时自动降级为"本地哈希向量"——只能把链路跑通，语义效果差。
+    embedding_provider: str = "qwen"
+    embedding_api_key: str = ""
+    embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    embedding_model: str = "text-embedding-v3"
+    embedding_timeout: int = 30
+
+    # 知识库：切片参数与数据源（切片存在 customer_db，和文档表同库，租户隔离靠 tenant_code）
+    kb_database_url: str = ""
+    # 切块大小：内置实现按"字符"算，LlamaIndex 按"token"算（同数值粒度不同，可按需分别调）
+    kb_chunk_size: int = 600
+    kb_chunk_overlap: int = 80
+    kb_max_file_mb: int = 20
+
     redis_url: str = "redis://localhost:6379/0"
     kafka_bootstrap: str = "localhost:9092"
     database_url: str = "postgresql://mac@127.0.0.1:5432/ai_db"

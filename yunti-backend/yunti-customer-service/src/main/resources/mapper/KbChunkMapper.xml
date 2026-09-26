@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.customer.mapper.KbChunkMapper">
+
+    <!-- 切片预览：不查 embedding 列（1024 个浮点数，取出来又慢又没用） -->
+    <select id="selectByDoc" resultType="cn.net.susan.customer.entity.KbChunk">
+        SELECT id, tenant_code, doc_id, chunk_no, content, char_count, token_count,
+               embedding_model, create_time
+          FROM kb_chunk
+         WHERE tenant_code = #{tenantCode}
+           AND doc_id = #{docId}
+         ORDER BY chunk_no
+         LIMIT #{limit}
+    </select>
+    <delete id="deleteByDoc">
+        DELETE FROM kb_chunk
+         WHERE tenant_code = #{tenantCode}
+           AND doc_id = #{docId}
+    </delete>
+</mapper>

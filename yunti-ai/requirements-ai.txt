@@ -2,7 +2,15 @@
 langchain>=0.3
 langgraph>=0.2
 langchain-openai>=0.2
+# 知识库（第 20 篇）：解析 docx/pdf 要 readers-file，向量化要 embeddings-openai
 llama-index>=0.11
+llama-index-readers-file>=0.4
+# LlamaIndex 读 docx 走 DocxReader，它内部依赖 docx2txt（不装会在读 docx 时报 'docx2txt is required'）
+docx2txt>=0.8
+llama-index-embeddings-openai>=0.3
+pgvector>=0.3
+# 中文 PDF 多为 CID 编码字体，内置兜底解析读不出来，pypdf 才能读
+pypdf>=5
 redis>=5
 kafka-python>=2.2
 openai>=1.40

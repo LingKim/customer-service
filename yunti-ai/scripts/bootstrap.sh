@@ -14,6 +14,12 @@ fi
 echo "[2/2] 安装依赖 ..."
 ./.venv/bin/pip install -r requirements.txt
 
+if [ "${AI:-0}" = "1" ] || [ "${1:-}" = "--with-ai" ]; then
+  ./.venv/bin/pip install -r requirements-ai.txt
+else
+  echo "可选 AI 依赖：bash scripts/bootstrap.sh --with-ai"
+fi
+
 echo ""
 echo "完成。请在 IDEA 中把项目解释器指向：$(pwd)/.venv/bin/python"
 echo "然后选择运行配置 yunti-ai (Shell) 或 yunti-ai (Python) 即可。"

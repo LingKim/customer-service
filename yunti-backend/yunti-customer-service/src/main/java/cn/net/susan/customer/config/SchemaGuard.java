@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -50,14 +51,29 @@ public class SchemaGuard implements ApplicationRunner {
             "customer_db_routing.sql",
             "customer_db_realtime_qa.sql",
             "customer_db_qa_source.sql",
-            "customer_db_qa_timeout.sql"
+            "customer_db_qa_timeout.sql",
+            "customer_db_kb.sql"
     );
 
     /** 代码依赖的表 → 来源脚本 */
+    /** 列宽规则对应的来源脚本（列宽规则少，单独一张小表更清楚） */
+    private static final Map<String, String> SCRIPT_OF_LENGTH = Map.of(
+            "file_meta.mime_type", "customer_db_kb.sql"
+    );
+
     private static final Map<String, String> REQUIRED_TABLES = new LinkedHashMap<>();
 
     /** 代码依赖的列（表.列）→ 来源脚本 */
     private static final Map<String, String> REQUIRED_COLUMNS = new LinkedHashMap<>();
+
+    /**
+     * 列宽下限（表.列 → 最少多少字符）→ 来源脚本。
+     *
+     * <p>只检查"列在不在"是不够的：列在、但太短，写入照样炸。
+     * 典型例子是 ``file_meta.mime_type`` —— 原来 varchar(64)，
+     * 而 docx 的标准 MIME 有 71 个字符，上传 Word 必报 value too long。</p>
+     */
+    private static final Map<String, Integer> REQUIRED_MIN_LENGTH = new LinkedHashMap<>();
 
     static {
         REQUIRED_TABLES.put("agent_status", "customer_db_routing.sql");
@@ -65,6 +81,9 @@ public class SchemaGuard implements ApplicationRunner {
         REQUIRED_TABLES.put("qa_task", "customer_db_qa.sql");
         REQUIRED_TABLES.put("qa_review", "customer_db_qa.sql");
         REQUIRED_TABLES.put("qa_alert", "customer_db_realtime_qa.sql");
+        REQUIRED_TABLES.put("kb_chunk", "customer_db_kb.sql");
+        REQUIRED_TABLES.put("kb_document", "customer_db_kb.sql");
+        REQUIRED_TABLES.put("kb_category", "customer_db_kb.sql");
 
         REQUIRED_COLUMNS.put("channel.allowed_origins", "customer_db_security.sql");
         REQUIRED_COLUMNS.put("session.last_msg_seq", "customer_db_delivery.sql");
@@ -77,6 +96,10 @@ public class SchemaGuard implements ApplicationRunner {
         REQUIRED_COLUMNS.put("qa_rule.hit_keywords", "customer_db_realtime_qa.sql");
         REQUIRED_COLUMNS.put("qa_rule.severity", "customer_db_realtime_qa.sql");
         REQUIRED_COLUMNS.put("qa_rule.timeout_seconds", "customer_db_qa_timeout.sql");
+        REQUIRED_COLUMNS.put("kb_document.chunk_count", "customer_db_kb.sql");
+        REQUIRED_COLUMNS.put("kb_document.index_status", "customer_db_kb.sql");
+
+        REQUIRED_MIN_LENGTH.put("file_meta.mime_type", 128);
     }
 
     private final SchemaMapper schemaMapper;
@@ -105,6 +128,7 @@ public class SchemaGuard implements ApplicationRunner {
 
     private void checkAndRepair() {
         Map<String, List<String>> missing = missingObjects();
+        missing.putAll(missingLengths());
         if (missing.isEmpty()) {
             log.info("启动自检通过：customer_db 的表与列都齐全");
             return;
@@ -131,12 +155,34 @@ public class SchemaGuard implements ApplicationRunner {
         }
 
         Map<String, List<String>> stillMissing = missingObjects();
+        stillMissing.putAll(missingLengths());
         if (stillMissing.isEmpty()) {
             log.info("已自动补齐数据库结构（执行的脚本：{}）", String.join("、", missing.keySet()));
             return;
         }
         log.error("\n数据库结构仍不完整，请手动执行：bash scripts/migrate-customer-db.sh\n  仍缺少：{}",
                 stillMissing);
+    }
+
+    private Map<String, List<String>> missingLengths() {
+        Map<String, Integer> widths = new HashMap<>();
+        for (Map<String, Object> row : schemaMapper.selectColumnLengths()) {
+            String key = row.get("column_key") == null ? null : String.valueOf(row.get("column_key"));
+            Object length = row.get("max_length");
+            if (key != null && length instanceof Number number) {
+                widths.put(key, number.intValue());
+            }
+        }
+        Map<String, List<String>> result = new LinkedHashMap<>();
+        for (Map.Entry<String, Integer> entry : REQUIRED_MIN_LENGTH.entrySet()) {
+            Integer actual = widths.get(entry.getKey());
+            if (actual != null && actual < entry.getValue()) {
+                result.computeIfAbsent(SCRIPT_OF_LENGTH.getOrDefault(entry.getKey(), "customer_db_kb.sql"),
+                                key -> new ArrayList<>())
+                        .add("列 " + entry.getKey() + " 宽度 " + actual + " < " + entry.getValue());
+            }
+        }
+        return result;
     }
 
     private Map<String, List<String>> missingObjects() {

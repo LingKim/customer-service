@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.net.susan.customer.mapper.KbDocumentMapper">
+
+    <select id="selectDocuments" resultType="cn.net.susan.customer.entity.KbDocument">
+        SELECT id, tenant_code, doc_no, category_id, title, summary, source_type, file_id,
+               status, hit_count, useful_rate, author, publish_time,
+               chunk_count, index_status, index_message, file_name, file_size,
+               create_time, update_time, creator, editor, is_deleted
+          FROM kb_document
+         WHERE tenant_code = #{tenantCode}
+           AND is_deleted = FALSE
+           <if test="categoryId != null">
+           AND category_id = #{categoryId}
+           </if>
+           <if test="status != null">
+           AND status = #{status}
+           </if>
+           <if test="keyword != null and keyword != ''">
+           AND (doc_no ILIKE '%' || #{keyword} || '%'
+                OR title ILIKE '%' || #{keyword} || '%'
+                OR summary ILIKE '%' || #{keyword} || '%'
+                OR file_name ILIKE '%' || #{keyword} || '%')
+           </if>
+         ORDER BY update_time DESC, id DESC
+         LIMIT #{limit}
+    </select>
+    <!-- 总览：文档四个状态数 + 切片总数（切片表在同一个库，一次查完） -->
+    <select id="selectOverview" resultType="java.util.Map">
+        SELECT (SELECT COUNT(1) FROM kb_document d
+                 WHERE d.tenant_code = #{tenantCode} AND d.is_deleted = FALSE)            AS doc_total,
+               (SELECT COUNT(1) FROM kb_document d
+                 WHERE d.tenant_code = #{tenantCode} AND d.is_deleted = FALSE
+                   AND d.status = 3)                                                      AS published,
+               (SELECT COUNT(1) FROM kb_document d
+                 WHERE d.tenant_code = #{tenantCode} AND d.is_deleted = FALSE
+                   AND d.status = 1)                                                      AS draft,
+               (SELECT COUNT(1) FROM kb_document d
+                 WHERE d.tenant_code = #{tenantCode} AND d.is_deleted = FALSE
+                   AND d.index_status = 3)                                                AS indexed,
+               (SELECT COUNT(1) FROM kb_chunk c
+                 WHERE c.tenant_code = #{tenantCode})                                     AS chunk_total
+    </select>
+</mapper>

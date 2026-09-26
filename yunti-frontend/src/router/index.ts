@@ -84,6 +84,12 @@ const router = createRouter({
           meta: { title: '质检中心', requiresEnterprise: true },
         },
         {
+          path: 'modules/kb',
+          name: 'KnowledgeBase',
+          component: () => import('../views/kb/index.vue'),
+          meta: { title: '企业知识库', requiresEnterprise: true },
+        },
+        {
           path: 'modules/qa/alerts',
           name: 'QaAlerts',
           component: () => import('../views/qa/alerts.vue'),

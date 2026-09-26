@@ -26,6 +26,8 @@ yunti:
     internal-base-url: ${YUNTI_USER_INTERNAL_URL:http://127.0.0.1:9091}
   ai:
     qa-base-url: ${YUNTI_AI_SERVICE_URL:http://127.0.0.1:9100}
+    kb-base-url: ${YUNTI_AI_SERVICE_URL:http://127.0.0.1:9100}
+    log-payload: ${YUNTI_AI_LOG_PAYLOAD:false}
   internal:
     # 两个服务均须配置相同的非空值；未配置时拒绝会话内部接口调用
     shared-secret: ${YUNTI_INTERNAL_SHARED_SECRET:}

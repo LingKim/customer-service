@@ -23,6 +23,7 @@ SCRIPTS=(
   customer_db_realtime_qa.sql
   customer_db_qa_source.sql
   customer_db_qa_timeout.sql
+  customer_db_kb.sql
 )
 
 echo "目标库：${PGUSER}@${PGHOST}:${PGPORT}/${DB}"

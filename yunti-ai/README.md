@@ -71,8 +71,8 @@ bash scripts/bootstrap.sh     # 一键创建 .venv 并安装依赖
 
 安装可选依赖后可启用真实 Agent/RAG：
 
-```bash
-pip install -r requirements-ai.txt
+改成：
+
 ```
 
 当前未装 AI 依赖时，对话接口返回 **mock 回复** （代码里已留好接入点），保证骨架始终可运行。
