@@ -52,7 +52,8 @@ public class SchemaGuard implements ApplicationRunner {
             "customer_db_realtime_qa.sql",
             "customer_db_qa_source.sql",
             "customer_db_qa_timeout.sql",
-            "customer_db_kb.sql"
+            "customer_db_kb.sql",
+            "customer_db_bot_brain.sql"
     );
 
     /** 代码依赖的表 → 来源脚本 */
@@ -98,6 +99,7 @@ public class SchemaGuard implements ApplicationRunner {
         REQUIRED_COLUMNS.put("qa_rule.timeout_seconds", "customer_db_qa_timeout.sql");
         REQUIRED_COLUMNS.put("kb_document.chunk_count", "customer_db_kb.sql");
         REQUIRED_COLUMNS.put("kb_document.index_status", "customer_db_kb.sql");
+        REQUIRED_COLUMNS.put("session.bot_transfer_reason", "customer_db_bot_brain.sql");
 
         REQUIRED_MIN_LENGTH.put("file_meta.mime_type", 128);
     }
@@ -119,11 +121,41 @@ public class SchemaGuard implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         try {
+            checkScriptCopies();
             checkAndRepair();
         } catch (Exception e) {
             // 自检/补结构自身出错不该拦住启动：服务照起，问题写进日志
             log.warn("启动结构自检未完成（不影响启动，但相关功能可能报错）：{}", e.getMessage());
         }
+    }
+
+    /**
+     * 核对"增量脚本的运行期副本"是否齐全。
+     *
+     * <p>根目录 {@code schema/} 是权威版本，运行期执行的是
+     * {@code resources/schema/} 下的副本。改脚本时只改根目录、忘了同步副本，
+     * 后果很难看：自检能发现"少一列"，却因为找不到脚本而补不上，
+     * 最后在业务查询里炸成 {@code column "xxx" does not exist}——
+     * 报错点离真正的原因（少拷一个文件）隔着好几层调用栈。</p>
+     *
+     * <p>所以启动时先把这件事说清楚，别等到业务报错。</p>
+     */
+    private void checkScriptCopies() {
+        List<String> missing = new ArrayList<>();
+        for (String script : SCRIPT_ORDER) {
+            if (!new ClassPathResource("schema/" + script).exists()) {
+                missing.add(script);
+            }
+        }
+        if (missing.isEmpty()) {
+            log.info("增量脚本副本齐全（{} 个）", SCRIPT_ORDER.size());
+            return;
+        }
+        log.error("\n运行期缺少增量脚本副本：{}\n"
+                        + "  根目录 schema/ 是权威版本，请把文件复制到 "
+                        + "yunti-customer-service/src/main/resources/schema/ 后重新打包启动；\n"
+                        + "  或者直接手动执行：bash scripts/migrate-customer-db.sh",
+                String.join("、", missing));
     }
 
     private void checkAndRepair() {

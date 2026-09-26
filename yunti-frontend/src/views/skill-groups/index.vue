@@ -17,7 +17,7 @@
       <el-table-column prop="description" label="说明" min-width="200">
         <template #default="{ row }">{{ row.description || '—' }}</template>
       </el-table-column>
-      <el-table-column label="组内坐席" min-width="220">
+      <el-table-column label="组内坐席" min-width="240">
         <template #default="{ row }">
           <template v-if="row.members.length">
             <el-tag v-for="member in row.members" :key="member.userId" size="small" effect="plain" class="sg-chip">
@@ -25,6 +25,18 @@
             </el-tag>
           </template>
           <span v-else class="muted">未配置</span>
+          <!-- 组里没人、却已经被渠道绑定：会话派不到人。
+               （现在路由遇到"空组"会当场放宽到全部在线坐席，但配置还是应该改对） -->
+          <el-tag
+            v-if="!row.members.length && row.channels.length"
+            size="small"
+            type="warning"
+            effect="light"
+            class="sg-chip"
+            title="这个组没有成员，却有渠道绑着它：该渠道的会话找不到组内坐席（路由会在超时后放宽到全部在线坐席）"
+          >
+            有渠道无成员
+          </el-tag>
         </template>
       </el-table-column>
       <el-table-column label="绑定渠道" min-width="200">

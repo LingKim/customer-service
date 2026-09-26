@@ -49,15 +49,25 @@ def embed_texts(texts: list[str], *, tenant_code: str = "", trace_id: str = "") 
             return vectors, f"{settings.embedding_provider}:{settings.embedding_model}"
         except Exception as exc:  # noqa: BLE001
             # 远程失败不能把整个上传卡死：退回本地向量，并把原因记下来
-            logger.warning("远程向量化失败，降级为本地向量 trace=%s error=%s: %s",
-                           trace_id or "-", type(exc).__name__, exc)
+            logger.warning(
+                "远程向量化失败，降级为本地向量 trace=%s error=%s: %s\n"
+                "  → 本次写进去的向量没有语义，检索会退化成关键词匹配，效果明显变差。\n"
+                "  → 修好密钥（YUNTI_AI_QWEN_API_KEY 或 YUNTI_AI_EMBEDDING_API_KEY）后，"
+                "要把文档**重新索引**一遍——向量是索引那一刻算出来的。",
+                trace_id or "-", type(exc).__name__, exc)
     return [_local_vector(text) for text in texts], "local-hash"
 
 
 def _embed_remote(texts: list[str], settings, *, tenant_code: str, trace_id: str) -> list[list[float]]:
     url = settings.embedding_base_url.rstrip("/") + "/embeddings"
+    # 关键：这里必须用 embedding_key()（专用密钥没配时复用千问的 key）。
+    # 早先这里直接取 embedding_api_key，于是出现一个"静默失败"：
+    #   embed_texts 判断"有密钥"（复用了千问的）→ 真发请求时 Authorization 却是空的
+    #   → 401 → 被下面的兜底接住 → 悄悄换成 local-hash 向量。
+    #   现象就是"知识库明明有数据，机器人却答不上来"（检索捞错了块）。
+    api_key = settings.embedding_key()
     headers = {
-        "Authorization": f"Bearer {settings.embedding_api_key}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     vectors: list[list[float]] = []

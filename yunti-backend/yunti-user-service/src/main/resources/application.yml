@@ -21,7 +21,7 @@ yunti:
     # JWT 签名密钥：生产环境必须通过环境变量覆盖，长度不小于 32 字节
     jwt-secret: ${YUNTI_JWT_SECRET:yunti-customer-service-jwt-secret-please-change-in-prod-0123456789}
     # token 有效期（秒），默认 2 小时
-    jwt-expire-seconds: ${YUNTI_JWT_EXPIRE_SECONDS:7200}
+    jwt-expire-seconds: ${YUNTI_JWT_EXPIRE_SECONDS:43200}
     # 验证码调试模式：仅本地联调时返回明文 code，生产必须置 false
     captcha-debug: ${YUNTI_CAPTCHA_DEBUG:true}
   tenant:

@@ -30,6 +30,24 @@
         </el-button>
       </div>
     </div>
+    <!-- 向量质量告警：这是"知识库有数据、机器人却答不上来"最常见的原因 -->
+    <el-alert
+      v-if="vectorWarning"
+      class="vector-alert"
+      type="warning"
+      :closable="false"
+      show-icon
+      title="当前知识库的切片向量是兜底向量（没有语义）"
+    >
+      <template #default>
+        <div class="vector-alert-body">
+          <span>{{ kbHealth?.vectorQualityHint }}</span>
+          <span class="vector-alert-tip">
+            修好密钥后，请对下面每份文档点一次「重新索引」——向量是索引那一刻算出来的，只重启服务不会重算。
+          </span>
+        </div>
+      </template>
+    </el-alert>
     <div class="stat-row">
       <div class="stat-card">
         <div class="stat-icon blue"><el-icon :size="18"><Document /></el-icon></div>
@@ -123,13 +141,17 @@
               <el-tag size="small" :type="statusTag(row.status)" effect="light">{{ row.statusText }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="索引" width="150">
+          <el-table-column label="索引" width="190">
             <template #default="{ row }">
               <el-tooltip :content="row.indexMessage || '尚未建立索引'" placement="top">
                 <el-tag size="small" :type="indexTag(row.indexStatus)" effect="light">
                   {{ row.indexStatusText }}
                 </el-tag>
               </el-tooltip>
+              <!-- 索引消息里带着向量来源：local-hash 说明这份文档用的是兜底向量，检索不准 -->
+              <el-tag v-if="isFallbackVector(row)" size="small" type="danger" effect="plain" class="ml-6">
+                兜底向量
+              </el-tag>
             </template>
           </el-table-column>
           <el-table-column label="切片" width="90">
@@ -308,8 +330,10 @@
           AI 服务未就绪
         </el-tag>
         <div v-if="keywordMode" class="search-hint">
-          当前没配 <code>YUNTI_AI_EMBEDDING_API_KEY</code>，只能按字面匹配（把问题拆成片段逐个找）。
-          配好密钥并重新索引后，问法差几个字也能命中。
+          当前没有可用的向量密钥，只能按字面匹配（把问题拆成片段逐个找）——
+          这种模式下"退货多久能到账"容易捞回"退货开票怎么处理"这类沾边的块。
+          配好 <code>YUNTI_AI_QWEN_API_KEY</code>（向量化会自动复用它，不必单独配 EMBEDDING key）
+          并重新索引后，问法差几个字也能命中。
         </div>
       </div>
       <div v-loading="searching" class="hit-list">
@@ -335,6 +359,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import KnowledgeAssistant from '../../components/KnowledgeAssistant.vue'
+import { getKbHealth, type KbHealth } from '../../api/ai/kb'
 import {
   changeKbDocumentStatus,
   createKbCategory,
@@ -358,6 +383,8 @@ import {
 
 const loading = ref(false)
 const overview = ref<KbOverview | null>(null)
+/** 知识库体检结果：用来判断切片向量是不是"没语义的兜底向量" */
+const kbHealth = ref<KbHealth | null>(null)
 const categories = ref<KbCategoryItem[]>([])
 const documents = ref<KbDocItem[]>([])
 const categoryId = ref('')
@@ -402,10 +429,52 @@ const askVisible = ref(false)
 /** 是否是关键词兜底模式：是的话分值是"匹配度"，不是余弦相似度，标签也要跟着换 */
 const keywordMode = computed(() => (searchResult.value?.mode || '').includes('keyword'))
 
+/**
+ * 这份文档是不是用"兜底向量"索引的。
+ *
+ * 索引消息形如"已索引 12 个切片（local-hash）"——local-hash 就是没配密钥时
+ * 临时顶上的本地兜底向量（没有语义），这种文档的检索结果按字面匹配，
+ * 问法差几个字就命中不到。点一次「重新索引」即可换成真实向量。
+ */
+function isFallbackVector(row: KbDocItem) {
+  return !!row.indexMessage && row.indexMessage.includes('local-hash')
+}
+
+/**
+ * 要不要把"兜底向量"这条告警亮出来。
+ *
+ * 两种情况都算：库里已经有切片但是兜底向量（最要命，检索现在就是不准的），
+ * 或者压根没配向量密钥（接下来索引的还会是兜底向量）。
+ */
+const vectorWarning = computed(() => {
+  const health = kbHealth.value
+  if (!health) {
+    return false
+  }
+  const degraded = (health.chunkVectorModels || []).some((item) => item.model === 'local-hash')
+  return degraded || health.embeddingKeyConfigured === false
+})
+
 onMounted(loadAll)
 
 async function loadAll() {
-  await Promise.all([loadOverview(), loadCategories(), loadDocuments()])
+  await Promise.all([loadOverview(), loadCategories(), loadDocuments(), loadHealth()])
+}
+
+/**
+ * 知识库体检：判断库里的切片向量是不是"没语义的兜底向量"。
+ *
+ * <p>这是本页最容易踩的坑：文档传上来了、检索测试也有结果，看着一切正常，
+ * 但向量是索引那一刻算出来的——当时密钥没配好，存进去的就是兜底向量，
+ * 检索只能按字面匹配，机器人"答非所问"。所以进页面就把这个状态摆出来。</p>
+ */
+async function loadHealth() {
+  try {
+    kbHealth.value = await getKbHealth()
+  } catch {
+    // AI 服务没起也不影响看文档列表：不弹错，只是不显示这条告警
+    kbHealth.value = null
+  }
 }
 
 async function loadOverview() {
@@ -668,6 +737,9 @@ function formatSize(size: number) {
 <style scoped>
 .kb-page { width: 100%; min-width: 0; }
 
+.vector-alert { margin-bottom: 14px; }
+.vector-alert-body { display: flex; flex-direction: column; gap: 4px; line-height: 1.6; }
+.vector-alert-tip { color: #b45309; }
 .page-title-row {
   display: flex;
   align-items: flex-start;

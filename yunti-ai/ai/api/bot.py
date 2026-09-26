@@ -7,12 +7,14 @@ from decimal import Decimal
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from ..config import get_settings
 from ..core.db import connect
+from .kb import require_kb_secret, require_tenant_header
+from ..services import brain as brain_service
 
 router = APIRouter(prefix="/ai/v1/bot", tags=["bot"])
 
@@ -37,12 +39,14 @@ class ApiModel(BaseModel):
 class IntentCreate(ApiModel):
     name: str = Field(min_length=1, max_length=64)
     samples: str | None = None
+    escalate: bool = False
 
 
 class IntentUpdate(ApiModel):
     name: str | None = Field(default=None, min_length=1, max_length=64)
     samples: str | None = None
     status: int | None = Field(default=None, ge=1, le=2)
+    escalate: bool | None = None
 
 
 class SettingUpdate(ApiModel):
@@ -50,7 +54,12 @@ class SettingUpdate(ApiModel):
     welcome_message: str | None = Field(default=None, max_length=255)
     fallback_message: str | None = Field(default=None, max_length=255)
     transfer_prompt: str | None = Field(default=None, max_length=255)
+    transfer_message: str | None = Field(default=None, max_length=255)
     is_enabled: bool = True
+    reception_enabled: bool = True
+    transfer_on_anger: bool = True
+    transfer_after_unresolved: int = Field(default=2, ge=0, le=10)
+    transfer_keywords: str | None = Field(default=None, max_length=255)
 
 
 class ModelUpdate(ApiModel):
@@ -108,14 +117,17 @@ def ensure_setting(conn: Any, tenant: str) -> None:
     conn.execute(
         """INSERT INTO bot_setting
              (id, tenant_code, bot_name, welcome_message, fallback_message,
-              transfer_prompt, is_enabled, model_key, temperature)
-           VALUES (%s, %s, '小云', %s, %s, %s, TRUE, 'qwen-plus', 0.35)
+              transfer_prompt, transfer_message, transfer_keywords,
+              is_enabled, model_key, temperature)
+           VALUES (%s, %s, '小云', %s, %s, %s, %s, %s, TRUE, 'qwen-plus', 0.35)
            ON CONFLICT (tenant_code) DO NOTHING""",
         (
             new_id(), tenant,
             "您好，我是云梯智能客服小云，很高兴为您服务。",
             "抱歉，我暂时无法准确回答您的问题，请尝试联系人工客服。",
             "如需人工客服，请回复“转人工”。",
+            "好的，正在为您转接人工客服，请稍候。",
+            "转人工,人工客服,找人工,要人工,人工",
         ),
     )
 
@@ -125,13 +137,13 @@ def list_intents(tenant: str = Depends(require_bot_tenant)) -> dict[str, Any]:
     with connect() as conn:
         for code, name, samples in DEFAULT_INTENTS:
             conn.execute(
-                """INSERT INTO bot_intent (id, tenant_code, intent_code, name, samples)
-                   VALUES (%s, %s, %s, %s, %s)
+                """INSERT INTO bot_intent (id, tenant_code, intent_code, name, samples, escalate)
+                   VALUES (%s, %s, %s, %s, %s, %s)
                    ON CONFLICT (tenant_code, intent_code) DO NOTHING""",
-                (new_id(), tenant, code, name, samples),
+                (new_id(), tenant, code, name, samples, name == "人工客服"),
             )
         rows = conn.execute(
-            """SELECT id, intent_code, name, status, confidence, hit_count, samples, update_time
+            """SELECT id, intent_code, name, status, confidence, hit_count, samples, escalate, update_time
                  FROM bot_intent WHERE tenant_code = %s AND is_deleted = FALSE
                 ORDER BY create_time DESC, id DESC""",
             (tenant,),
@@ -144,10 +156,10 @@ def create_intent(body: IntentCreate, tenant: str = Depends(require_bot_tenant))
     intent_code = "IT" + secrets.token_hex(12).upper()
     with connect() as conn:
         row = conn.execute(
-            """INSERT INTO bot_intent (id, tenant_code, intent_code, name, samples)
-               VALUES (%s, %s, %s, %s, %s)
-               RETURNING id, intent_code, name, status, confidence, hit_count, samples, update_time""",
-            (new_id(), tenant, intent_code, body.name.strip(), body.samples),
+            """INSERT INTO bot_intent (id, tenant_code, intent_code, name, samples, escalate)
+               VALUES (%s, %s, %s, %s, %s, %s)
+               RETURNING id, intent_code, name, status, confidence, hit_count, samples, escalate, update_time""",
+            (new_id(), tenant, intent_code, body.name.strip(), body.samples, body.escalate),
         ).fetchone()
     return ok(clean(row))
 
@@ -165,6 +177,9 @@ def update_intent(intent_id: int, body: IntentUpdate, tenant: str = Depends(requ
     if body.status is not None:
         changes.append("status = %s")
         values.append(body.status)
+    if body.escalate is not None:
+        changes.append("escalate = %s")
+        values.append(body.escalate)
     if not changes:
         return ok()
     values.extend((intent_id, tenant))
@@ -185,6 +200,8 @@ def get_setting(tenant: str = Depends(require_bot_tenant)) -> dict[str, Any]:
         ensure_setting(conn, tenant)
         row = conn.execute(
             """SELECT id, bot_name, welcome_message, fallback_message, transfer_prompt,
+                      transfer_message, transfer_keywords, reception_enabled,
+                      transfer_on_anger, transfer_after_unresolved,
                       is_enabled, model_key, temperature, update_time
                  FROM bot_setting WHERE tenant_code = %s AND is_deleted = FALSE""",
             (tenant,),
@@ -199,12 +216,19 @@ def update_setting(body: SettingUpdate, tenant: str = Depends(require_bot_tenant
         row = conn.execute(
             """UPDATE bot_setting
                   SET bot_name = %s, welcome_message = %s, fallback_message = %s,
-                      transfer_prompt = %s, is_enabled = %s, update_time = CURRENT_TIMESTAMP
+                      transfer_prompt = %s, transfer_message = %s, transfer_keywords = %s,
+                      reception_enabled = %s, transfer_on_anger = %s,
+                      transfer_after_unresolved = %s, is_enabled = %s,
+                      update_time = CURRENT_TIMESTAMP
                 WHERE tenant_code = %s AND is_deleted = FALSE
                 RETURNING id, bot_name, welcome_message, fallback_message,
-                          transfer_prompt, is_enabled, model_key, temperature, update_time""",
+                          transfer_prompt, transfer_message, transfer_keywords,
+                          reception_enabled, transfer_on_anger, transfer_after_unresolved,
+                          is_enabled, model_key, temperature, update_time""",
             (body.bot_name.strip(), body.welcome_message, body.fallback_message,
-             body.transfer_prompt, body.is_enabled, tenant),
+             body.transfer_prompt, body.transfer_message, body.transfer_keywords,
+             body.reception_enabled, body.transfer_on_anger,
+             body.transfer_after_unresolved, body.is_enabled, tenant),
         ).fetchone()
     return ok(clean(row))
 
@@ -252,3 +276,49 @@ def update_model(body: ModelUpdate, tenant: str = Depends(require_bot_tenant)) -
             (body.model_key, body.temperature, tenant),
         )
     return ok()
+
+
+@router.get("/dialogues")
+def list_dialogues(limit: int = 50, tenant: str = Depends(require_bot_tenant)) -> dict[str, Any]:
+    return ok([clean(item) for item in brain_service.list_dialogues(tenant, limit)])
+
+
+@router.get("/intent-stats")
+def intent_stats(tenant: str = Depends(require_bot_tenant)) -> dict[str, Any]:
+    with connect() as conn:
+        total = conn.execute(
+            """SELECT COALESCE(SUM(turn_count), 0) AS turns,
+                      COUNT(1) AS sessions,
+                      COALESCE(SUM(CASE WHEN transferred THEN 1 ELSE 0 END), 0) AS transferred
+                 FROM bot_dialogue WHERE tenant_code = %s AND is_deleted = FALSE""",
+            (tenant,),
+        ).fetchone()
+        by_intent = conn.execute(
+            """SELECT COALESCE(last_intent, '其他') AS intent, COUNT(1) AS sessions,
+                      COALESCE(SUM(CASE WHEN transferred THEN 1 ELSE 0 END), 0) AS transferred
+                 FROM bot_dialogue WHERE tenant_code = %s AND is_deleted = FALSE
+                GROUP BY COALESCE(last_intent, '其他') ORDER BY sessions DESC""",
+            (tenant,),
+        ).fetchall()
+        by_emotion = conn.execute(
+            """SELECT COALESCE(last_emotion, '中性') AS emotion, COUNT(1) AS sessions
+                 FROM bot_dialogue WHERE tenant_code = %s AND is_deleted = FALSE
+                GROUP BY COALESCE(last_emotion, '中性') ORDER BY sessions DESC""",
+            (tenant,),
+        ).fetchall()
+    return ok({"totalTurns": int(total["turns"]), "totalSessions": int(total["sessions"]),
+               "transferredSessions": int(total["transferred"]),
+               "byIntent": [clean(item) for item in by_intent],
+               "byEmotion": [clean(item) for item in by_emotion]})
+
+
+@router.get("/internal/profile", dependencies=[Depends(require_kb_secret)])
+def internal_profile(request: Request, tenant_code: str) -> dict[str, Any]:
+    require_tenant_header(request, tenant_code)
+    with connect() as conn:
+        row = conn.execute(
+            """SELECT bot_name, welcome_message, reception_enabled
+                 FROM bot_setting WHERE tenant_code = %s AND is_deleted = FALSE""",
+            (tenant_code,),
+        ).fetchone()
+    return ok(clean(row))

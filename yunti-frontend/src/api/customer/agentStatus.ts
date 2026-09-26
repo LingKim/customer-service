@@ -5,7 +5,10 @@ export interface AgentStatusItem {
   agentId: string
   status: number
   statusText: string
+  /** 最多同时接待几单 */
   maxConcurrency: number
+  /** 当前正在接待几单（达到上限后路由不再派新会话） */
+  activeCount: number
   connected: boolean
 }
 

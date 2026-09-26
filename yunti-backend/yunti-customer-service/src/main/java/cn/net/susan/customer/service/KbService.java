@@ -111,6 +111,12 @@ public class KbService {
         return result;
     }
 
+    public Map<String, Object> health(LoginUser user) {
+        Map<String, Object> details = new LinkedHashMap<>(aiClient.healthDetail(tenantOf(user)));
+        details.remove("fallbackDocIds");
+        return details;
+    }
+
     /** 文档列表。 */
     public List<DocVO> documents(LoginUser user, Long categoryId, Integer status, String keyword) {
         String tenant = tenantOf(user);

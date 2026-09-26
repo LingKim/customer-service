@@ -27,7 +27,15 @@ yunti:
   ai:
     qa-base-url: ${YUNTI_AI_SERVICE_URL:http://127.0.0.1:9100}
     kb-base-url: ${YUNTI_AI_SERVICE_URL:http://127.0.0.1:9100}
+    bot-base-url: ${YUNTI_AI_SERVICE_URL:http://127.0.0.1:9100}
+    bot-timeout-seconds: ${YUNTI_AI_BOT_TIMEOUT_SECONDS:60}
     log-payload: ${YUNTI_AI_LOG_PAYLOAD:false}
+  bot:
+    enabled: ${YUNTI_BOT_ENABLED:true}
+    reception-enabled: ${YUNTI_BOT_RECEPTION_ENABLED:true}
+    top-k: ${YUNTI_BOT_TOP_K:5}
+  kb:
+    auto-reindex: ${YUNTI_KB_AUTO_REINDEX:false}
   internal:
     # 两个服务均须配置相同的非空值；未配置时拒绝会话内部接口调用
     shared-secret: ${YUNTI_INTERNAL_SHARED_SECRET:}

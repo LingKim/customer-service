@@ -67,6 +67,9 @@ public class SessionService {
     public static final int SENDER_BOT = 3;
     public static final int SENDER_SYSTEM = 4;
 
+    /** 会话流转类型：6-机器人转人工（与 1-转接区分开，坐席能看出"这单是机器人转过来的"） */
+    public static final int EVENT_BOT_TRANSFER = 6;
+
     /** 可见范围码：1-客户与坐席都可见、2-仅坐席可见（内部备注） */
     public static final int VISIBLE_ALL = 1;
     public static final int VISIBLE_AGENT_ONLY = 2;
@@ -102,6 +105,28 @@ public class SessionService {
     /** 质检中心：会话结束后按真实对话建质检任务 */
     private final ObjectProvider<QaService> qaServiceProvider;
 
+    /** AI 客服大脑：机器人接待一轮（意图 / 情绪 / 回复 / 是否转人工） */
+    private final ObjectProvider<BotBrainService> botBrainProvider;
+
+    /**
+     * "依赖没装配上"这类问题的告警开关：一旦发生，每条消息都会命中同一条分支，
+     * 按消息打日志会把日志刷爆；但完全不打又会让"功能悄悄不干活"。
+     * 所以只报第一次，后续降噪。
+     */
+    private final AtomicBoolean realtimeQaMissingWarned = new AtomicBoolean(false);
+    private final AtomicBoolean qaTaskMissingWarned = new AtomicBoolean(false);
+    private final AtomicBoolean routingMissingWarned = new AtomicBoolean(false);
+    private final AtomicBoolean botBrainMissingWarned = new AtomicBoolean(false);
+
+    /** 第一次命中才打日志（返回 true 表示这次该打） */
+    private boolean warnOnce(AtomicBoolean flag, String message, Object... args) {
+        if (flag.compareAndSet(false, true)) {
+            log.warn(message, args);
+            return true;
+        }
+        return false;
+    }
+
     public SessionService(
             SessionMapper sessionMapper,
             SessionMessageMapper sessionMessageMapper,
@@ -113,7 +138,8 @@ public class SessionService {
             SnowflakeIdGenerator idGenerator,
             ObjectProvider<RoutingService> routingProvider,
             ObjectProvider<RealtimeQaService> realtimeQaProvider,
-            ObjectProvider<QaService> qaServiceProvider
+            ObjectProvider<QaService> qaServiceProvider,
+            ObjectProvider<BotBrainService> botBrainProvider
     ) {
         this.sessionMapper = sessionMapper;
         this.sessionMessageMapper = sessionMessageMapper;
@@ -126,6 +152,13 @@ public class SessionService {
         this.routingProvider = routingProvider;
         this.realtimeQaProvider = realtimeQaProvider;
         this.qaServiceProvider = qaServiceProvider;
+        this.botBrainProvider = botBrainProvider;
+    }
+
+    /** 是否开启机器人首轮接待（全局开关，租户级开关由 AI 侧的 bot_setting 决定）。 */
+    private boolean botReceptionEnabled() {
+        BotBrainService brain = botBrainProvider.getIfAvailable();
+        return brain != null && brain.receptionEnabled();
     }
 
     /**
@@ -164,17 +197,25 @@ public class SessionService {
         if (session == null) {
             session = createSession(tenant, channel, customer);
             created = true;
-            appendSystemMessage(tenant, session, "访客进入会话，等待客服接入");
-            log.info("访客会话创建 tenant={} sessionNo={} channel={} customerNo={}",
-                    tenant, session.getSessionNo(), channel.getName(), customer.getCustomerNo());
-            // 进线即路由：有在线且接得下的人就直接分过去，不用等坐席手点
-            routeQuietly(tenant, session.getSessionNo());
+            if (botReceptionEnabled()) {
+                // 机器人先接待：先进"2-机器人接待"，不立刻派人工。
+                // 客户问完，AI 客服大脑判断该转人工时才入队（见 BotBrainService.escalate）。
+                markBotReception(tenant, session);
+            } else {
+                appendSystemMessage(tenant, session, "访客进入会话，等待客服接入");
+                log.info("访客会话创建 tenant={} sessionNo={} channel={} customerNo={}",
+                        tenant, session.getSessionNo(), channel.getName(), customer.getCustomerNo());
+                // 进线即路由：有在线且接得下的人就直接分过去，不用等坐席手点
+                routeQuietly(tenant, session.getSessionNo());
+            }
         }
 
         String token = visitorTokenService.createToken(
                 customer.getId(), customer.getName(), tenant, session.getSessionNo());
         String identityToken = visitorTokenService.createIdentityToken(
                 customer.getId(), customer.getCustomerNo(), customer.getName(), tenant);
+        BotBrainService brain = botBrainProvider.getIfAvailable();
+        String botName = brain == null ? null : brain.botProfile(tenant).botName();
         return new OpenResult(
                 session.getSessionNo(),
                 customer.getCustomerNo(),
@@ -183,7 +224,8 @@ public class SessionService {
                 visitorTokenService.expireAt(),
                 session.getStatus(),
                 created,
-                identityToken
+                identityToken,
+                botName
         );
     }
 
@@ -203,6 +245,37 @@ public class SessionService {
             result.add(toSessionVO(row));
         }
         return result;
+    }
+
+    /**
+     * 工作台顶部计数：我的接待 / 待接待。
+     *
+     * <p>以前这两个数字是前端从**当前这个标签页的列表**里数出来的：
+     * 停在「待接待」时"我的接待"就变成 0，停在「我的会话」时"待接待"就是 0——
+     * 数字随标签页乱变，还和路由那边的"接待量"对不上（路由算的是 status=3 的会话数）。
+     * 现在统一由服务端按固定口径统计：</p>
+     * <ul>
+     *   <li>mine  = 我负责且接待中（status=3）——和路由判断"接满了没"用的是同一个口径；</li>
+     *   <li>queue = 没人负责且未结束（status 1/2）——待接待。</li>
+     * </ul>
+     */
+    public WorkloadVO workload(LoginUser user) {
+        String tenant = tenantOf(user);
+        Long mine = sessionMapper.selectCount(Wrappers.<Session>lambdaQuery()
+                .eq(Session::getTenantCode, tenant)
+                .eq(Session::getAgentId, user.userId())
+                .eq(Session::getStatus, STATUS_AGENT)
+                .eq(Session::getDeleted, false));
+        Long queue = sessionMapper.selectCount(Wrappers.<Session>lambdaQuery()
+                .eq(Session::getTenantCode, tenant)
+                .isNull(Session::getAgentId)
+                .in(Session::getStatus, STATUS_QUEUING, STATUS_BOT)
+                .eq(Session::getDeleted, false));
+        return new WorkloadVO(mine == null ? 0 : mine.intValue(), queue == null ? 0 : queue.intValue());
+    }
+
+    /** 工作台顶部计数 */
+    public record WorkloadVO(int mine, int queue) {
     }
 
     /**
@@ -252,6 +325,7 @@ public class SessionService {
                 session.getSource(),
                 session.getIntent(),
                 session.getEmotion(),
+                session.getBotTransferReason(),
                 session.getStartTime(),
                 session.getEndTime(),
                 null,
@@ -368,9 +442,81 @@ public class SessionService {
 
         LocalDateTime now = LocalDateTime.now();
         touchCustomer(tenantCode, session.getCustomerId(), now);
+        // 落库成功这一行是消息链路的"账本"：客户说发了、坐席说没收到时先看它——
+        // 有这条 seq，说明消息进了库，问题在推送；没有，说明请求压根没到这一层
+        // （那就去实时网关看"收到上行消息"有没有打出来）。
+        log.info("消息落库 tenant={} sessionNo={} seq={} msgNo={} senderType={} 可见范围={} "
+                        + "客户端消息号={} 长度={} 内容={}",
+                tenantCode, sessionNo, message.getSeq(), message.getMsgNo(), senderType,
+                visibleTo, normalizedClientMsgNo,
+                message.getContent() == null ? 0 : message.getContent().length(),
+                preview(message.getContent()));
         // 边聊边检：消息落库后立刻过一遍实时质检规则（放在事务提交后跑）
         scheduleRealtimeQa(tenantCode, session, message);
+        // 客服大脑：客户说完，机器人回一句（同样放在事务提交后跑）
+        scheduleBotReply(tenantCode, session, message);
         return toMessageVO(message);
+    }
+
+    /**
+     * AI 客服大脑：客户消息落库后，让机器人接一轮。
+     *
+     * <p>几个刻意的设计：</p>
+     * <ol>
+     *   <li><b>只对客户消息触发</b>：机器人自己的回复（senderType=3）和系统提示（4）
+     *       不会再触发一次，否则就是自己跟自己聊；</li>
+     *   <li><b>事务提交后再跑</b>：机器人要读这段对话的完整历史，消息得先落库；
+     *       模型调用还慢（秒级），放在事务里会把消息发送这条链路一起拖住；</li>
+     *   <li><b>失败只降级、不报错</b>：AI 挂了就当机器人答不出来，直接转人工，
+     *       客户发消息这个动作本身永远不能被 AI 的可用性影响。</li>
+     * </ol>
+     */
+    private void scheduleBotReply(String tenantCode, Session session, SessionMessage message) {
+        // 机器人自己的回复（3）和系统提示（4）本来就不该再触发一轮，跳过不用记日志
+        if (!Integer.valueOf(SENDER_CUSTOMER).equals(message.getSenderType())) {
+            return;
+        }
+        // 下面两种跳过必须留日志：现象都是"客户发了消息、机器人一声不吭"，
+        // 没有日志就只能靠猜——这两行是最容易被问到的"为什么不回话"。
+        if (!botReceptionEnabled()) {
+            log.info("机器人跳过本轮：机器人接待总开关是关的（yunti.bot.enabled / reception-enabled）"
+                    + " tenant={} sessionNo={}", tenantCode, session.getSessionNo());
+            return;
+        }
+        if (session.getAgentId() != null) {
+            // 已经是人工接待了，机器人不该插话（避免客户以为两个人在同时跟他说话）
+            log.info("机器人跳过本轮：会话已由人工客服接待 agentId={} tenant={} sessionNo={}",
+                    session.getAgentId(), tenantCode, session.getSessionNo());
+            return;
+        }
+        String sessionNo = session.getSessionNo();
+        log.debug("客户消息触发机器人接待 tenant={} sessionNo={} seq={}",
+                tenantCode, sessionNo, message.getSeq());
+        Runnable task = () -> {
+            BotBrainService brain = botBrainProvider.getIfAvailable();
+            if (brain == null) {
+                warnOnce(botBrainMissingWarned,
+                        "机器人接待不可用：BotBrainService 没有装配上，所有会话都不会有机器人回复");
+                return;
+            }
+            try {
+                // 异步：机器人这一轮要调 AI（秒级），不能拖住"客户消息发送成功"这条响应
+                brain.handleCustomerMessageAsync(tenantCode, sessionNo);
+            } catch (Exception e) {
+                log.warn("机器人接待失败 tenant={} sessionNo={} error={}",
+                        tenantCode, sessionNo, e.getMessage());
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    task.run();
+                }
+            });
+            return;
+        }
+        task.run();
     }
 
     /**
@@ -383,6 +529,8 @@ public class SessionService {
         Runnable task = () -> {
             RealtimeQaService qa = realtimeQaProvider.getIfAvailable();
             if (qa == null) {
+                warnOnce(realtimeQaMissingWarned,
+                        "实时质检不可用：RealtimeQaService 没有装配上，边聊边检不会生效");
                 return;
             }
             try {
@@ -483,11 +631,144 @@ public class SessionService {
     }
 
     /**
+     * 进入"机器人接待"：状态切到 2，并落一条系统提示。
+     *
+     * <p>为什么状态要单独一个值：<b>排队调度（每 10 秒扫一次）只捞"1-排队中"</b>。
+     * 如果机器人接待还留在 1，会话会在 10 秒内被派给人工坐席，机器人一句话都没机会说——
+     * 这是"机器人接待"最容易踩的坑：功能写完了，但被路由抢走了。</p>
+     */
+    @Transactional
+    public Session markBotReception(String tenantCode, Session session) {
+        LocalDateTime now = LocalDateTime.now();
+        Session update = new Session();
+        update.setId(session.getId());
+        update.setStatus(STATUS_BOT);
+        update.setUpdateTime(now);
+        sessionMapper.updateById(update);
+        session.setStatus(STATUS_BOT);
+        // 开场白单独发一条机器人消息：客户一进线就看到欢迎语，之后每条回答就只是回答。
+        // （以前把欢迎语拼在第一条回答前面，客户问完问题还要再被自我介绍一遍，很啰嗦）
+        BotBrainService brain = botBrainProvider.getIfAvailable();
+        String greeting = brain == null ? null : brain.botProfile(tenantCode).welcomeMessage();
+        if (greeting != null && !greeting.isBlank()) {
+            SessionMessage welcome = buildMessage(
+                    tenantCode, session.getId(), SENDER_BOT, null, 1, greeting, VISIBLE_ALL);
+            welcome.setSeq(nextSeq(tenantCode, session.getId()));
+            sessionMessageMapper.insert(welcome);
+        } else {
+            // 取不到欢迎语（AI 没起 / 没配）时退回一句通用提示，别让开场是空的
+            appendSystemMessage(tenantCode, session, "已接入智能客服，请直接描述您的问题");
+        }
+        log.info("进入机器人接待 tenant={} sessionNo={}", tenantCode, session.getSessionNo());
+        return session;
+    }
+
+    /**
+     * 机器人转人工：状态切回"1-排队中"，记一条流转，并立刻尝试分配坐席。
+     *
+     * @param reason 转人工原因（坐席能看到"这单为什么转过来"，而不是只看到一个待接待）
+     * @param notice 给客户看的一句系统提示；机器人自己已经说了交接话术时传 null，避免同一句话说两遍
+     * @return 落库的那条系统提示（没传 notice 时返回 null），调用方拿去推给长连接
+     */
+    @Transactional
+    public EscalateResult escalateToHuman(String tenantCode, String sessionNo, String reason, String notice) {
+        Session session = requireSession(tenantCode, sessionNo);
+        if (Integer.valueOf(STATUS_CLOSED).equals(session.getStatus())) {
+            return EscalateResult.EMPTY;
+        }
+        if (session.getAgentId() != null) {
+            // 已经有人工接手了，机器人不该再抢着转一次
+            return new EscalateResult(null, session.getAgentId());
+        }
+        String remark = trimRemark(reason);
+        // 已经因为机器人的原因转过一次了：只保证它在队列里，不再重复记流转、也不再补一句一样的话
+        // （否则客户连发几条消息、或者 AI 一直连不上，对话框里会刷出一串"正在为您转接人工客服"）
+        boolean alreadyTransferred = session.getBotTransferReason() != null
+                && Integer.valueOf(STATUS_QUEUING).equals(session.getStatus());
+        if (alreadyTransferred) {
+            log.info("机器人转人工已记录过，跳过重复处理 tenant={} sessionNo={} 原原因={}",
+                    tenantCode, sessionNo, session.getBotTransferReason());
+            routeQuietly(tenantCode, sessionNo);
+            // 已经在队列里：再试一次分配，把结果告诉调用方（客户可能还在等）
+            return new EscalateResult(null, currentAgentId(tenantCode, sessionNo));
+        }
+        Session update = new Session();
+        update.setId(session.getId());
+        update.setStatus(STATUS_QUEUING);
+        // 原因落在会话上：坐席列表和会话头部直接显示，不用再翻流转记录
+        update.setBotTransferReason(remark);
+        update.setUpdateTime(LocalDateTime.now());
+        sessionMapper.updateById(update);
+        session.setStatus(STATUS_QUEUING);
+        session.setBotTransferReason(remark);
+        recordEvent(tenantCode, session.getId(), EVENT_BOT_TRANSFER, null, "BOT", QUEUE_TARGET,
+                remark == null ? "智能客服转人工" : remark);
+        MessageVO noticeVO = null;
+        if (notice != null && !notice.isBlank()) {
+            SessionMessage message = buildMessage(
+                    tenantCode, session.getId(), SENDER_SYSTEM, null, 5, notice, VISIBLE_ALL);
+            message.setSeq(nextSeq(tenantCode, session.getId()));
+            sessionMessageMapper.insert(message);
+            noticeVO = toMessageVO(message);
+        }
+        log.info("机器人转人工 tenant={} sessionNo={} 原因={}", tenantCode, sessionNo, remark);
+        // 转完立刻试一次自动分配；分不到就留在队列里，等坐席认领或 10 秒兜底调度
+        routeQuietly(tenantCode, sessionNo);
+        return new EscalateResult(noticeVO, currentAgentId(tenantCode, sessionNo));
+    }
+
+    /** 再查一次会话当前的负责坐席（分配成功与否，决定跟客户怎么说明） */
+    private Long currentAgentId(String tenantCode, String sessionNo) {
+        try {
+            return requireSession(tenantCode, sessionNo).getAgentId();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 转人工的结果。
+     *
+     * @param notice  需要立刻推给客户的提示（没有就为 null）
+     * @param agentId 实际接手的坐席；为 null 表示"还在队列里等"——
+     *                调用方据此决定要不要告诉客户"当前没人，已排队"，而不是让客户无限等一句话
+     */
+    public record EscalateResult(MessageVO notice, Long agentId) {
+        public static final EscalateResult EMPTY = new EscalateResult(null, null);
+
+        public boolean assigned() {
+            return agentId != null;
+        }
+    }
+
+    /**
+     * 记录机器人这一轮识别出的意图与情绪（工作台列表与会话头部直接展示）。
+     */
+    @Transactional
+    public void updateBotState(String tenantCode, Long sessionId, String intent, String emotion) {
+        if (sessionId == null) {
+            return;
+        }
+        Session update = new Session();
+        update.setId(sessionId);
+        if (intent != null && !intent.isBlank()) {
+            update.setIntent(intent.length() > 64 ? intent.substring(0, 64) : intent);
+        }
+        if (emotion != null && !emotion.isBlank()) {
+            update.setEmotion(emotion.length() > 20 ? emotion.substring(0, 20) : emotion);
+        }
+        update.setUpdateTime(LocalDateTime.now());
+        sessionMapper.updateById(update);
+    }
+
+    /**
      * 触发一次路由；失败不影响主流程（坐席照样能手动接入，定时任务也会兜底）。
      */
     private void routeQuietly(String tenantCode, String sessionNo) {
         RoutingService routing = routingProvider.getIfAvailable();
         if (routing == null) {
+            warnOnce(routingMissingWarned,
+                    "智能路由不可用：RoutingService 没有装配上，会话只会停在队列里等坐席手点");
             return;
         }
         try {
@@ -592,6 +873,8 @@ public class SessionService {
         Runnable task = () -> {
             QaService qa = qaServiceProvider.getIfAvailable();
             if (qa == null) {
+                warnOnce(qaTaskMissingWarned,
+                        "质检任务不可用：QaService 没有装配上，会话结束后不会生成质检任务");
                 return;
             }
             try {
@@ -738,6 +1021,15 @@ public class SessionService {
                 .eventTime(now)
                 .createTime(now)
                 .build());
+    }
+
+    /** 日志里的内容预览：换行压平、超长截断，够定位问题就行，不把整段会话搬进日志 */
+    private String preview(String content) {
+        if (content == null || content.isBlank()) {
+            return "-";
+        }
+        String flat = content.replaceAll("\\s+", " ").trim();
+        return flat.length() <= 60 ? flat : flat.substring(0, 60) + "…";
     }
 
     private String trimRemark(String remark) {
@@ -925,6 +1217,7 @@ public class SessionService {
                 stringValue(row.get("source")),
                 stringValue(row.get("intent")),
                 stringValue(row.get("emotion")),
+                stringValue(row.get("bot_transfer_reason")),
                 dateValue(row.get("start_time")),
                 dateValue(row.get("end_time")),
                 stringValue(row.get("last_content")),
@@ -1001,7 +1294,14 @@ public class SessionService {
             int sessionStatus,
             boolean created,
             /** 访客身份令牌（长期）：前端保存，下次打开时回传以复用客户档案 */
-            String visitorIdentityToken
+            String visitorIdentityToken,
+            /**
+             * 机器人显示名（租户配置的 bot_name）。
+             *
+             * <p>客户端的消息标签用它，而不是写死"机器人"——真实客服系统给客户看的是
+             * 助手名字（店小蜜、小云…），不是"你在跟机器人说话"这种提醒。</p>
+             */
+            String botName
     ) {
     }
 
@@ -1017,6 +1317,7 @@ public class SessionService {
             String source,
             String intent,
             String emotion,
+            String botTransferReason,
             LocalDateTime startTime,
             LocalDateTime endTime,
             String lastContent,

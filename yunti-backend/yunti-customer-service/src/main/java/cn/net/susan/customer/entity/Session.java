@@ -45,6 +45,9 @@ public class Session {
 
     private String emotion;
 
+    /** 机器人转人工的原因（客户情绪激动 / 答不上来 / 命中转人工意图等） */
+    private String botTransferReason;
+
     /** 来源：网站、微信、小程序等 */
     private String source;
 

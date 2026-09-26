@@ -7,6 +7,9 @@
         <span class="name">在线客服工作台</span>
         <el-tag size="small" :type="stateTagType" effect="light">{{ stateText }}</el-tag>
         <span class="tip">我的接待 {{ myCount }} 单 / 待接待 {{ queueCount }} 单</span>
+        <span v-if="loadFull" class="tip tip-full">
+          已接满 {{ myActiveCount }}/{{ myMaxConcurrency }}，不会再有新会话自动派给你
+        </span>
       </div>
       <div class="ws-filters">
         <el-select v-model="myStatus" style="width: 132px" @change="changeMyStatus">
@@ -14,6 +17,20 @@
           <el-option :value="2" label="忙碌 · 不接单" />
           <el-option :value="3" label="小休" />
         </el-select>
+        <!-- 接待量：路由就是按"已接单数 < 上限"筛人的，接满了同样派不到 -->
+        <span class="load-tip" :class="{ 'is-full': loadFull }">
+          已接 {{ myActiveCount }}/{{ myMaxConcurrency }} 单
+        </span>
+        <!-- 能不能被自动派单，取决于三个条件：状态在线、长连接在线、还有余量 -->
+        <el-tag
+          v-if="!routable"
+          size="small"
+          type="warning"
+          effect="light"
+          :title="routableHint"
+        >
+          暂不会被派单
+        </el-tag>
         <el-radio-group v-model="scope" size="default" @change="onScopeChange">
           <el-radio-button value="queue">待接待</el-radio-button>
           <el-radio-button value="mine">我的会话</el-radio-button>
@@ -93,6 +110,12 @@
               </div>
               <div class="li-bottom">
                 <span class="li-chip" :class="statusClass(item)">{{ statusLabel(item) }}</span>
+                <span v-if="item.intent" class="li-brain">{{ item.intent }}</span>
+                <span
+                  v-if="item.emotion && item.emotion !== '中性'"
+                  class="li-brain"
+                  :class="`li-brain-${emotionTagType(item.emotion)}`"
+                >{{ item.emotion }}</span>
                 <span class="li-channel">
                   <el-icon :size="12"><component :is="channelIcon(item)" /></el-icon>
                   {{ channelText(item) }}
@@ -123,6 +146,22 @@
                   v-if="!isClosed && assistAgents.length"
                 > · 协助中：{{ assistAgents.join('、') }}</template>
               </div>
+              <div v-if="activeSession.intent || activeSession.emotion" class="ch-brain">
+                <span class="ch-brain-label">智能客服识别</span>
+                <el-tag v-if="activeSession.intent" size="small" effect="plain">
+                  意图：{{ activeSession.intent }}
+                </el-tag>
+                <el-tag v-if="activeSession.emotion" size="small" :type="emotionTagType(activeSession.emotion)" effect="light">
+                  情绪：{{ activeSession.emotion }}
+                </el-tag>
+                <span v-if="botTransferReason" class="ch-brain-reason">
+                  转人工原因：{{ botTransferReason }}
+                </span>
+              </div>
+              <!-- 人工接待期间机器人不会自动回客户，这行说明省得以为是"机器人坏了" -->
+              <div v-if="!isClosed && activeSession.agentId" class="ch-bot-note">
+                机器人已转辅助：人工接待期间不会自动回复客户，需要查资料点左下角「知识助手」
+              </div>
             </div>
             <div class="ch-right">
               <el-button v-if="!isClosed && !activeSession.agentId" size="small" type="primary" @click="claim">
@@ -130,6 +169,14 @@
               </el-button>
               <el-button v-if="!isClosed && isMine" size="small" @click="release">退回队列</el-button>
               <el-button v-if="!isClosed" size="small" @click="openTransfer">转接</el-button>
+              <el-button
+                size="small"
+                :disabled="!messages.length"
+                title="把当前会话的记录复制成文本（可直接贴进工单或群里）"
+                @click="copyConversation"
+              >
+                复制会话
+              </el-button>
               <el-button
                 v-if="!isClosed"
                 size="small"
@@ -175,29 +222,78 @@
             </span>
             <el-button link type="primary" size="small" @click="openClose">立即结束</el-button>
           </div>
-          <div ref="scrollRef" class="chat-body">
+          <div ref="scrollRef" class="chat-body" @scroll.passive="onScroll">
             <div v-if="loadingHistory" class="chat-tip">正在加载聊天记录…</div>
-            <div
-              v-for="msg in messages"
-              :key="msg.msgId"
-              class="msg-row"
-              :class="[msgRowClass(msg), { 'qa-risky': riskySeqs.has(Number(msg.seq ?? -1)) }]"
-            >
-              <div class="msg-bubble" :class="{ 'is-pending': msg.pending, 'is-failed': msg.failed }">
-                <div class="msg-meta">
-                  {{ senderText(msg) }}
-                  <span v-if="msg.visibleTo === 2" class="note-tag">内部备注</span>
-                  <span v-if="riskySeqs.has(Number(msg.seq ?? -1))" class="qa-tag">质检命中</span>
+            <template v-for="(msg, index) in messages" :key="msg.msgId">
+              <!-- 时间分割：和上一条隔得久（或第一条）才显示一次，不再每条都挂时间 -->
+              <div v-if="showTimeDivider(index)" class="msg-divider">{{ dividerText(msg.sendTime) }}</div>
+              <!-- 系统提示：居中灰胶囊，没有头像也没有气泡 -->
+              <div v-if="msg.senderType === 4" class="msg-system">{{ msg.content }}</div>
+              <div
+                v-else
+                class="msg-row"
+                :class="[msgRowClass(msg), { 'qa-risky': riskySeqs.has(Number(msg.seq ?? -1)) }]"
+              >
+                <!-- 头像：客户用姓名首字，机器人用品牌标，坐席用姓名首字（和左侧列表同一套） -->
+                <div
+                  class="msg-avatar"
+                  :class="msgAvatarClass(msg)"
+                  :title="senderText(msg)"
+                >
+                  <img v-if="msg.senderType === 3" class="msg-avatar-bot" src="/yunti-mark.svg" alt="机器人" />
+                  <template v-else>{{ msgAvatarText(msg) }}</template>
                 </div>
-                <div class="msg-content">{{ msg.content }}</div>
-                <div class="msg-time">
-                  <template v-if="msg.pending">发送中…</template>
-                  <template v-else-if="msg.failed">发送失败，网络恢复后自动补发</template>
-                  <template v-else>{{ fullTime(msg.sendTime) }}</template>
+                <div class="msg-main">
+                  <div class="msg-meta">
+                    {{ senderText(msg) }}
+                    <span v-if="msg.visibleTo === 2" class="note-tag">内部备注</span>
+                    <span v-if="riskySeqs.has(Number(msg.seq ?? -1))" class="qa-tag">质检命中</span>
+                  </div>
+                  <div class="msg-bubble" :class="{ 'is-pending': msg.pending, 'is-failed': msg.failed }">
+                    <!-- 卡片消息：正文照常显示；"转人工客服"按钮是给客户点的，坐席这边只做提示 -->
+                    <div class="msg-content">{{ cardOf(msg)?.text ?? msg.content }}</div>
+                    <div v-if="cardOf(msg)?.actions?.length" class="msg-card-note">
+                      已向客户提供「{{ cardOf(msg)?.actions?.[0]?.label }}」入口
+                    </div>
+                    <div class="msg-time">
+                      <template v-if="msg.pending">发送中…</template>
+                      <template v-else-if="msg.failed">发送失败，网络恢复后自动补发</template>
+                      <template v-else>{{ fullTime(msg.sendTime) }}</template>
+                    </div>
+                  </div>
+                </div>
+                <!-- 复制按钮放在整行最外侧：悬停才出现，不遮正文，正文照样可以自由选中 -->
+                <div class="msg-actions">
+                  <el-tooltip content="复制这条消息" placement="top" :show-after="200">
+                    <button class="msg-copy" type="button" @click="copyMessage(msg)">
+                      <el-icon :size="13"><CopyDocument /></el-icon>
+                    </button>
+                  </el-tooltip>
+                </div>
+              </div>
+            </template>
+            <div v-if="!messages.length" class="chat-tip">还没有消息，输入内容开始接待</div>
+            <!-- 自己翻上去看历史时，新消息不硬拽，只提示一下 -->
+            <button
+              v-if="hasNewBelow"
+              class="scroll-new"
+              type="button"
+              @click="jumpToBottom"
+            >
+              有新消息 ↓
+            </button>
+            <!-- 机器人正在想：坐席能看到"客户那条已经被机器人接手了"，不用自己去抢 -->
+            <div v-if="botTyping" class="msg-row is-agent">
+              <div class="msg-avatar msg-avatar-bot-wrap">
+                <img class="msg-avatar-bot" src="/yunti-mark.svg" alt="机器人" />
+              </div>
+              <div class="msg-main">
+                <div class="msg-meta">{{ senderBotLabel }}</div>
+                <div class="msg-bubble is-typing">
+                  <div class="typing-dots"><i /><i /><i /></div>
                 </div>
               </div>
             </div>
-            <div v-if="!messages.length" class="chat-tip">还没有消息，输入内容开始接待</div>
           </div>
           <div class="chat-input">
             <el-input
@@ -292,10 +388,11 @@
   </div>
 </template>
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   ChatDotRound,
   Clock,
+  CopyDocument,
   Iphone,
   Monitor,
   Promotion,
@@ -311,14 +408,18 @@ import { fetchPresence } from '../../api/realtime'
 import { fetchAgentStatuses, updateAgentStatus, type AgentStatusItem } from '../../api/customer/agentStatus'
 import { fetchSessionQaAlerts, handleQaAlert, type QaAlertItem } from '../../api/customer/qa'
 import KnowledgeAssistant from '../../components/KnowledgeAssistant.vue'
+import { copyText } from '../../utils/clipboard'
+import { useChatScroll } from '../../utils/chatScroll'
 import { openVisitorTestTab } from '../../utils/visitor'
 import {
+  fetchSessionWorkload,
   getSessionDetail,
   listSessionMessages,
   listSessions,
   type SessionItem,
   type SessionMessageItem,
 } from '../../api/customer/session'
+import { getBotSetting } from '../../api/ai/bot'
 import { listColleagues, type ColleagueOption } from '../../api/member'
 import { getToken } from '../../utils/auth'
 import { useUserStore } from '../../stores/user'
@@ -338,7 +439,12 @@ const scope = ref<'queue' | 'mine' | 'all'>('queue')
 
 const activeSessionNo = ref('')
 const activeSession = ref<SessionItem | null>(null)
+const botTransferReason = computed(() => activeSession.value?.botTransferReason || '')
 const messages = ref<SessionMessageItem[]>([])
+/** 机器人正在输入（当前会话）：让坐席知道客户那条已经被机器人接住了 */
+const botTyping = ref(false)
+/** 机器人显示名：坐席侧标成"小云（机器人）"，比干巴巴的"机器人"更清楚是谁在答 */
+const botName = ref('')
 const loadingHistory = ref(false)
 /** 还有没有更早的消息：没有就把「更早消息」置灰，避免点了没反应 */
 const hasMore = ref(false)
@@ -357,6 +463,16 @@ const agentOnline = ref<Record<string, { online: boolean; sessionCount: number }
 const visitorTestChannel = ref<ChannelResult | null>(null)
 /** 我的坐席状态：1-在线、2-忙碌、3-小休（智能路由据此决定是否派单） */
 const myStatus = ref(1)
+/**
+ * 我的长连接是否在线（服务端记录的 is_connected）。
+ *
+ * <p>能不能被自动派单看两个条件：状态 =「在线·可接单」**且** 长连接在线。
+ * 只满足一个，路由就找不到你，而界面上看不出来——那正是"我明明登录着，怎么没派给我"的来源。</p>
+ */
+const myConnected = ref(true)
+/** 我的接待上限与当前接待量（和路由筛人用的是同一份口径） */
+const myMaxConcurrency = ref(5)
+const myActiveCount = ref(0)
 /** 同事状态：转接选人时显示"在线 / 忙碌 / 小休" */
 const agentStatuses = ref<Record<string, AgentStatusItem>>({})
 /** 当前会话的实时质检告警（边聊边检命中后由长连接推过来） */
@@ -486,6 +602,8 @@ const stateClass = computed(() => `dot-${connectionState.value}`)
 
 onMounted(async () => {
   await Promise.all([loadSessions(), loadMembers(), loadVisitorTestChannel(), loadAgentStatuses()])
+  // 机器人名字：坐席侧把它标在机器人消息上（"小云（机器人）"），比"机器人"更明确是谁在答
+  void loadBotName()
   connect()
   // 首屏也走一次 HTTP 对账：万一长连接连不上（或还没建好），在线状态也不会先错一屏
   void syncWorkspace()
@@ -518,6 +636,16 @@ onUnmounted(() => {
   client?.close()
 })
 
+/** 取租户配置的机器人名字（拿不到就不标，退回"机器人"） */
+async function loadBotName() {
+  try {
+    const setting = await getBotSetting()
+    botName.value = setting.botName || ''
+  } catch {
+    botName.value = ''
+  }
+}
+
 async function loadMembers() {
   try {
     members.value = await listColleagues()
@@ -543,11 +671,32 @@ async function loadAgentStatuses() {
   try {
     const view = await fetchAgentStatuses()
     myStatus.value = view.mine.status
+    myConnected.value = view.mine.connected !== false
+    myMaxConcurrency.value = view.mine.maxConcurrency || 5
+    myActiveCount.value = view.mine.activeCount || 0
     agentStatuses.value = Object.fromEntries(view.agents.map((item) => [item.agentId, item]))
   } catch {
     // 拿不到不影响接待
   }
 }
+
+/** 接待量是否已经到上限（到了就不会再被派新会话） */
+const loadFull = computed(() => myActiveCount.value >= myMaxConcurrency.value)
+
+/** 我当前能不能被自动派单：在线 + 长连接在线 + 还有余量 */
+const routable = computed(() => myStatus.value === 1 && myConnected.value && !loadFull.value)
+
+/** 不能派单时给一句能照做的说明 */
+const routableHint = computed(() => {
+  if (myStatus.value !== 1) {
+    return '当前状态不是「在线 · 可接单」，新会话不会自动派给你'
+  }
+  if (!myConnected.value) {
+    return '长连接还没就绪（服务端记录为离线），刷新页面或稍等重连完成即可恢复派单'
+  }
+  return `已接待 ${myActiveCount.value}/${myMaxConcurrency.value} 单，达到上限：结束掉已处理完的会话，`
+    + '或把「最多同时接待数」调大一些'
+})
 
 /** 拉一次当前会话的实时质检告警（切会话、被派单时都补一次） */
 async function loadSessionQaAlerts(sessionNo: string) {
@@ -634,6 +783,9 @@ function connect() {
   }
   client = new RealtimeClient({
     token,
+    // 重连时取最新令牌：标签页可能开了一整天，登录令牌早就换了一轮
+    tokenProvider: getToken,
+    onAuthFailed: () => void verifyLoginOnRealtimeFailure(),
     onMessage: handleMessage,
     onStateChange: (state) => {
       connectionState.value = state
@@ -643,10 +795,38 @@ function connect() {
       // 重连期间可能漏掉了推送，连上后补一次列表同步
       if (state === 'open') {
         scheduleListReload()
+        // 长连接刚恢复：服务端那边也会把 is_connected 置回 true，这里顺手对一次账
+        void loadAgentStatuses()
       }
     },
   })
   client.connect()
+}
+
+/**
+ * 长连接反复连不上时，确认一次登录态。
+ *
+ * <p>握手被拒（令牌过期）在浏览器侧只表现为"连不上"：和"实时服务没启动""网络断"
+ * 长得一模一样。这里借一次真实的 HTTP 请求去问服务端——令牌真过期，全局 401 处理会
+ * 弹专业提示并把用户送回登录页；服务端一切正常就什么都不做，继续重连即可。</p>
+ */
+async function verifyLoginOnRealtimeFailure() {
+  // 只借这次请求触发全局登录态处理，不在这里重复提示（提示由统一的 401 处理负责）
+  await fetchPresence()
+}
+
+/** "正在输入"的安全绳：推送丢了也要自动熄灭，不能一直转 */
+let typingTimer: number | undefined
+function scheduleTypingTimeout() {
+  if (typingTimer) {
+    window.clearTimeout(typingTimer)
+  }
+  if (!botTyping.value) {
+    return
+  }
+  typingTimer = window.setTimeout(() => {
+    botTyping.value = false
+  }, 40000)
 }
 
 async function handleMessage(message: RealtimeMessage) {
@@ -660,6 +840,9 @@ async function handleMessage(message: RealtimeMessage) {
       }
       // 先给反馈，不等网络：刷新列表哪怕慢/失败，坐席也能看到"被派单了"
       highlightAssigned(sessionNo)
+      if (sessionNo === activeSessionNo.value) {
+        void mergeLatestHistory(sessionNo)
+      }
       ElNotification({
         title: '已自动接入客户',
         message: `智能路由把会话 ${sessionNo} 分配给了你，正在「我的会话」里等你接待`,
@@ -710,14 +893,28 @@ async function handleMessage(message: RealtimeMessage) {
       } else if (messages.value.length >= JOIN_HISTORY_HINT) {
         hasMore.value = true
       }
-      scrollToBottom()
+      // 刚进会话：必须看到最新几条，强制到底
+      scrollToBottom(true)
       break
     }
     case 'ACK':
       appendMessage(message.data as SessionMessageItem)
       break
+    case 'TYPING': {
+      const payload = (message.data ?? {}) as { who?: string; typing?: boolean }
+      if (message.sessionNo === activeSessionNo.value) {
+        botTyping.value = payload.typing !== false && payload.who !== 'AGENT'
+        scheduleTypingTimeout()
+        // 提示气泡出现/消失都会改高度，跟着滚一下才不会"半截露在外面"
+        scrollToBottom()
+      }
+      break
+    }
     case 'MESSAGE': {
       const item = message.data as SessionMessageItem | undefined
+      if (message.sessionNo === activeSessionNo.value) {
+        botTyping.value = false
+      }
       // 坐席可能同时订阅多个会话，只有当前打开的那条才往对话窗口里塞，避免串台
       if (message.sessionNo === activeSessionNo.value) {
         appendMessage(item)
@@ -733,7 +930,15 @@ async function handleMessage(message: RealtimeMessage) {
     case 'SESSION': {
       const session = message.data as SessionItem | undefined
       if (session && session.sessionNo === activeSessionNo.value) {
+        const wasMine = !!activeSession.value?.agentId
+          && Number(activeSession.value.agentId) === Number(userStore.userId)
         activeSession.value = { ...(activeSession.value ?? {}), ...session } as SessionItem
+        const nowMine = !!session.agentId && Number(session.agentId) === Number(userStore.userId)
+        if (!wasMine && nowMine) {
+          // 刚接手这条会话：把接手之前的对话（机器人接待那一段）补齐。
+          // 坐席必须看到前因后果，否则只能从半截开始猜客户在问什么。
+          void mergeLatestHistory(session.sessionNo)
+        }
       }
       scheduleListReload()
       break
@@ -780,6 +985,8 @@ async function loadSessions(options: { silent?: boolean } = {}) {
       scope: scope.value,
       keyword: keyword.value || undefined,
     })
+    // 计数按服务端口径重算（我的接待数 = 路由眼里的接待量）
+    void loadWorkload()
     // 已经不在当前列表里的会话，未读角标一起清掉
     const visible = new Set(sessions.value.map((item) => item.sessionNo))
     unreadMap.value = Object.fromEntries(
@@ -861,7 +1068,8 @@ async function openSession(item: SessionItem) {
     activeSession.value = detail
     messages.value = dedupe(history)
     hasMore.value = history.length >= HISTORY_PAGE_SIZE
-    scrollToBottom()
+    // 切换会话：从最新一条开始看
+    scrollToBottom(true)
   } catch {
     // 请求层已提示
   } finally {
@@ -896,6 +1104,30 @@ async function loadMore() {
     // 请求层已经提示过失败原因
   } finally {
     loadingMore.value = false
+  }
+}
+
+/**
+ * 把服务端最近的消息补进当前会话（按消息号去重，按序号排序）。
+ *
+ * <p>用在"会话刚变成我的"这一刻：坐席接手时，机器人之前跟客户聊的那几轮必须出现在窗口里，
+ * 否则坐席等于从半截接手——客户说过什么、机器人承诺过什么，全都要重新问一遍。</p>
+ */
+async function mergeLatestHistory(sessionNo: string) {
+  try {
+    const latest = await listSessionMessages(sessionNo, { limit: 50 })
+    if (sessionNo !== activeSessionNo.value || !latest.length) {
+      return
+    }
+    const merged = dedupe([...messages.value, ...latest])
+      .slice()
+      .sort((left, right) => Number(left.seq ?? 0) - Number(right.seq ?? 0))
+    messages.value = merged
+    if (latest.length >= HISTORY_PAGE_SIZE) {
+      hasMore.value = true
+    }
+  } catch {
+    // 拉不到就等下一次（JOINED 里还会带一份历史），不影响正常接待
   }
 }
 
@@ -956,7 +1188,8 @@ async function send() {
     sendTime: new Date().toISOString(),
     pending: true,
   })
-  scrollToBottom()
+  // 自己发的消息一定要出现在眼前（哪怕之前翻着历史）
+  scrollToBottom(true)
   draft.value = ''
   sending.value = true
   try {
@@ -978,6 +1211,75 @@ async function send() {
     ElMessage.error(e instanceof Error ? e.message : '发送失败，请重试')
   } finally {
     sending.value = false
+  }
+}
+
+/**
+ * 复制单条消息。
+ *
+ * <p>只复制正文，不带"客服/客户"前缀和小时刻——坐席要的多半是内容本身；
+ * 需要带来源的整段记录用右上角的「复制会话」。</p>
+ */
+async function copyMessage(msg: SessionMessageItem) {
+  const ok = await copyText(msg.content || '')
+  if (ok) {
+    ElMessage.success('已复制这条消息')
+  } else {
+    ElMessage.warning('复制失败，请手动选中文字后 Ctrl/Cmd + C')
+  }
+}
+
+/**
+ * 复制整段会话记录（带时间与发言人）。
+ *
+ * <p>真实工作场景里坐席经常要把对话贴进工单、贴到群里问人，
+ * 一行行手工选太慢；这里按"时间 发言人：内容"排好再进剪贴板。</p>
+ */
+async function copyConversation() {
+  if (!messages.value.length) {
+    return
+  }
+  const header = `会话 ${activeSessionNo.value}`
+    + (activeSession.value?.customerName ? ` · 客户 ${activeSession.value.customerName}` : '')
+    + (activeSession.value?.source ? ` · 来源 ${activeSession.value.source}` : '')
+  const lines = messages.value.map((msg) => {
+    const time = fullTime(msg.sendTime)
+    const who = senderText(msg)
+    const note = msg.visibleTo === 2 ? '[内部备注] ' : ''
+    return `[${time}] ${who}：${note}${msg.content}`
+  })
+  const ok = await copyText([header, ...lines].join('\n'))
+  if (ok) {
+    ElMessage.success(`已复制 ${lines.length} 条聊天记录`)
+  } else {
+    ElMessage.warning('复制失败，请手动选中文字后 Ctrl/Cmd + C')
+  }
+}
+
+/**
+ * 卡片消息（msgType=3）：{"text": "...", "actions": [...]}。
+ *
+ * <p>按钮是给客户点的，坐席端只显示"已向客户提供入口"，避免坐席误以为要自己点。
+ * 解析失败就退回纯文本渲染，老消息不受影响。</p>
+ */
+interface MessageCardAction {
+  type: string
+  label: string
+}
+interface MessageCard {
+  text: string
+  actions?: MessageCardAction[]
+}
+
+function cardOf(message: SessionMessageItem): MessageCard | null {
+  if (message.msgType !== 3 || !message.content) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(message.content) as MessageCard
+    return typeof parsed?.text === 'string' ? parsed : null
+  } catch {
+    return null
   }
 }
 
@@ -1059,14 +1361,11 @@ function dedupe(list: SessionMessageItem[]) {
   })
 }
 
-function scrollToBottom() {
-  void nextTick(() => {
-    const el = scrollRef.value
-    if (el) {
-      el.scrollTop = el.scrollHeight
-    }
-  })
-}
+/**
+ * 聊天区滚动交给公共工具：双 rAF 保证滚到真正的底部，
+ * 而且用户翻历史时不会被新消息硬拽下去（只会提示"有新消息 ↓"）。
+ */
+const { hasNewBelow, scrollToBottom, onScroll, jumpToBottom } = useChatScroll(scrollRef)
 
 function msgRowClass(message: SessionMessageItem) {
   if (message.senderType === 2) {
@@ -1078,6 +1377,88 @@ function msgRowClass(message: SessionMessageItem) {
   return 'is-system'
 }
 
+/** 两条消息间隔超过这个时长就插一条时间分割线（和访客窗口同一口径） */
+const TIME_DIVIDER_GAP_MS = 5 * 60 * 1000
+
+/** 要不要在这条消息前面显示时间分割线 */
+function showTimeDivider(index: number) {
+  const current = parseTime(messages.value[index]?.sendTime)
+  if (!current) {
+    return false
+  }
+  if (index === 0) {
+    return true
+  }
+  const previous = parseTime(messages.value[index - 1]?.sendTime)
+  return !previous || current - previous > TIME_DIVIDER_GAP_MS
+}
+
+function parseTime(value?: string | null): number {
+  if (!value) {
+    return 0
+  }
+  const time = new Date(value.replace(' ', 'T')).getTime()
+  return Number.isNaN(time) ? 0 : time
+}
+
+/** 分割线文案：今天只写时间，昨天/更早带上日期 */
+function dividerText(value?: string | null) {
+  const time = parseTime(value)
+  if (!time) {
+    return ''
+  }
+  const date = new Date(time)
+  const clock = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  const today = new Date()
+  if (date.toDateString() === today.toDateString()) {
+    return clock
+  }
+  const yesterday = new Date(today.getTime() - 24 * 3600 * 1000)
+  if (date.toDateString() === yesterday.toDateString()) {
+    return `昨天 ${clock}`
+  }
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${clock}`
+}
+
+/**
+ * 头像里显示什么：客户/坐席取姓名首字，机器人用品牌图标（不显示字）。
+ *
+ * <p>和左侧会话列表里的客户头像同一套规则（首字 + 按名字散列配色），
+ * 这样坐席在列表里认出的那张脸，进会话还是同一张。</p>
+ */
+function msgAvatarText(message: SessionMessageItem) {
+  if (message.senderType === 1) {
+    return (activeSession.value?.customerName || '访').slice(0, 1).toUpperCase()
+  }
+  if (message.senderType === 2) {
+    const name = senderText(message)
+    // 拿不到坐席姓名时退回"服"字，别出现空白头像
+    return name && name !== '客服' ? name.slice(0, 1).toUpperCase() : '服'
+  }
+  return ''
+}
+
+/**
+ * 头像底色：客户沿用**左侧列表那一套**（按会话号散列取 av-1~6），
+ * 坐席统一蓝、内部备注橙色、机器人走品牌标。
+ */
+function msgAvatarClass(message: SessionMessageItem) {
+  if (message.senderType === 3) {
+    return 'msg-avatar-bot-wrap'
+  }
+  if (message.senderType === 2) {
+    return message.visibleTo === 2 ? 'msg-avatar-note' : 'msg-avatar-agent'
+  }
+  let hash = 0
+  for (const char of activeSessionNo.value) {
+    hash = (hash * 31 + char.charCodeAt(0)) % 997
+  }
+  return `av-${(hash % 6) + 1}`
+}
+
+/** 机器人名字（头像旁边的标识），和访客窗口口径一致 */
+const senderBotLabel = computed(() => (botName.value ? `${botName.value}（机器人）` : '机器人'))
+
 function senderText(message: SessionMessageItem) {
   if (message.senderType === 2) {
     return message.senderId ? agentName(message.senderId) : '客服'
@@ -1086,7 +1467,8 @@ function senderText(message: SessionMessageItem) {
     return '客户'
   }
   if (message.senderType === 3) {
-    return '机器人'
+    // 坐席侧需要区分人机，所以用"机器人名字 + 机器人标记"（名字取自租户配置）
+    return botName.value ? `${botName.value}（机器人）` : '机器人'
   }
   return '系统'
 }
@@ -1138,9 +1520,18 @@ function statusLabel(item: SessionItem) {
     return '客户已离线'
   }
   if (!item.agentId) {
-    return '待接待'
+    // 2 = 机器人接待中（还没转人工），与"待接待"区分开
+    return item.status === 2 ? '机器人接待中' : '待接待'
   }
   return isMySession(item) ? '我接待中' : '同事接待中'
+}
+
+/** 情绪标签配色：越负面越扎眼，坐席扫一眼就知道哪条要优先看 */
+function emotionTagType(emotion?: string | null): 'danger' | 'warning' | 'info' | 'success' | 'primary' {
+  if (emotion === '愤怒') return 'danger'
+  if (emotion === '不满') return 'warning'
+  if (emotion === '焦虑') return 'info'
+  return 'success'
 }
 
 function statusClass(item: SessionItem) {
@@ -1151,7 +1542,7 @@ function statusClass(item: SessionItem) {
     return 'st-offline'
   }
   if (!item.agentId) {
-    return 'st-wait'
+    return item.status === 2 ? 'st-bot' : 'st-wait'
   }
   return isMySession(item) ? 'st-mine' : 'st-other'
 }
@@ -1381,6 +1772,12 @@ function fullTime(value?: string | null) {
   flex-wrap: wrap;
 }
 
+/* 接满提示：橙色小字，紧跟计数；点右侧「暂不会被派单」标签可以定位原因 */
+.tip-full {
+  color: #b45309;
+  font-weight: 600;
+}
+
 .ws-title {
   display: flex;
   align-items: center;
@@ -1414,6 +1811,18 @@ function fullTime(value?: string | null) {
 .dot-connecting {
   background: #f59e0b;
   box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16);
+}
+
+/* 接待量提示：接满时变橙，和"暂不会被派单"标签呼应 */
+.load-tip {
+  font-size: 12px;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.load-tip.is-full {
+  color: #b45309;
+  font-weight: 600;
 }
 
 .ws-filters {
@@ -1795,6 +2204,13 @@ function fullTime(value?: string | null) {
   box-shadow: inset 0 0 0 1px #a7f3d0;
 }
 
+/* 机器人接待中：和"待接待"（橙色，客户在等）区分开，用中性蓝表示"有人管着" */
+.st-bot {
+  background: #eef2ff;
+  color: #4338ca;
+  box-shadow: inset 0 0 0 1px #c7d2fe;
+}
+
 .st-other {
   background: #eff6ff;
   color: #1d4ed8;
@@ -1827,6 +2243,31 @@ function fullTime(value?: string | null) {
 
 .li-channel {
   max-width: 92px;
+}
+
+/* 列表上的意图 / 情绪小标签：不抢状态标签的位置，只在识别出来时补一小段 */
+.li-brain {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.li-brain-danger {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.li-brain-warning {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.li-brain-info {
+  background: #eff6ff;
+  color: #1d4ed8;
 }
 
 .li-extra {
@@ -1901,6 +2342,32 @@ function fullTime(value?: string | null) {
   color: #94a3b8;
 }
 
+/* 智能客服识别结果：意图 / 情绪 / 转人工原因，坐席接手前先看这一行 */
+.ch-brain {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.ch-brain-label {
+  color: #a5b0c4;
+}
+
+.ch-brain-reason {
+  color: #b45309;
+}
+
+/* 机器人角色说明：浅灰小字，只在人工接待时出现，不抢注意力 */
+.ch-bot-note {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #a5b0c4;
+}
+
 .ch-right {
   display: flex;
   gap: 8px;
@@ -1914,6 +2381,26 @@ function fullTime(value?: string | null) {
   background: #fafbfd;
 }
 
+/* "有新消息"提示：贴着输入框上方浮着，点了才滚到底（不硬拽用户） */
+.scroll-new {
+  position: sticky;
+  bottom: 0;
+  display: block;
+  margin: 4px auto 0;
+  padding: 4px 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(29, 78, 216, 0.12);
+}
+
+.scroll-new:hover {
+  background: #dbeafe;
+}
+
 .chat-tip {
   text-align: center;
   color: #94a3b8;
@@ -1923,7 +2410,146 @@ function fullTime(value?: string | null) {
 
 .msg-row {
   display: flex;
-  margin-bottom: 12px;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+/* 头像：和访客窗口同一套规格（32px 圆、显式锁死尺寸，三种身份必须一样大） */
+.msg-avatar {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  max-width: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  padding: 0;
+  margin-top: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  background: #94a3b8;
+}
+
+/* 机器人：浅蓝底 + 居中品牌标 */
+.msg-avatar-bot-wrap {
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+}
+
+.msg-avatar-bot {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+/* 坐席：统一蓝；内部备注：橙色，一眼区分"这句客户看不到" */
+.msg-avatar-agent {
+  background: linear-gradient(135deg, #1d4ed8, #3b82f6);
+}
+
+.msg-avatar-note {
+  background: linear-gradient(135deg, #d97706, #f59e0b);
+}
+
+/* 客户头像的 6 套底色：和左侧会话列表用的是同一组色值 */
+.msg-avatar.av-1 { background: linear-gradient(135deg, #1d4ed8, #3b82f6); }
+.msg-avatar.av-2 { background: linear-gradient(135deg, #0f766e, #14b8a6); }
+.msg-avatar.av-3 { background: linear-gradient(135deg, #7c3aed, #a78bfa); }
+.msg-avatar.av-4 { background: linear-gradient(135deg, #b45309, #f59e0b); }
+.msg-avatar.av-5 { background: linear-gradient(135deg, #be123c, #fb7185); }
+.msg-avatar.av-6 { background: linear-gradient(135deg, #0369a1, #38bdf8); }
+
+/* 名字 + 气泡竖排；气泡宽度在这里控制（扣掉头像与复制按钮） */
+.msg-main {
+  min-width: 0;
+  max-width: 62%;
+  display: flex;
+  flex-direction: column;
+}
+
+.msg-row.is-customer .msg-main {
+  align-items: flex-end;
+}
+
+/* 客户这条没有名字行，头像跟气泡顶部对齐 */
+.msg-row.is-customer .msg-avatar {
+  margin-top: 2px;
+}
+
+/* 时间分割线：居中灰字，代替"每条消息都挂时间" */
+.msg-divider {
+  text-align: center;
+  font-size: 11px;
+  color: #a3aec2;
+  margin: 10px 0 8px;
+}
+
+/* 系统提示：居中灰胶囊，没有头像也没有气泡 */
+.msg-system {
+  margin: 8px auto;
+  padding: 4px 12px;
+  max-width: 88%;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #7c8aa5;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* 悬停出现的复制按钮：常态隐藏，鼠标移到这条消息上才出现。
+   放在气泡外侧（收到的消息在左、我发的在右），不会压住正文，
+   正文自身仍然是普通可选文本，用鼠标划选 + Ctrl/Cmd + C 一样能用。 */
+.msg-actions {
+  display: flex;
+  align-items: flex-start;
+  padding-top: 20px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  order: 3;
+}
+
+.msg-row.is-customer .msg-actions {
+  order: -1;
+  padding-top: 2px;
+}
+
+.msg-row:hover .msg-actions,
+.msg-row:focus-within .msg-actions {
+  opacity: 1;
+}
+
+.msg-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fff;
+  color: #64748b;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.msg-copy:hover {
+  color: #2563eb;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+/* 触屏设备没有 hover：让按钮常驻（半透明），否则平板上点不出来 */
+@media (hover: none) {
+  .msg-actions { opacity: 0.5; }
 }
 
 .msg-row.is-customer {
@@ -1946,18 +2572,23 @@ function fullTime(value?: string | null) {
 }
 
 .msg-bubble {
-  max-width: 62%;
+  width: fit-content;
+  max-width: 100%;
   padding: 9px 12px;
   border-radius: 12px;
+  /* 靠近头像的那个角收小，形成"从谁嘴里说出来"的观感 */
+  border-top-left-radius: 4px;
   background: #fff;
   border: 1px solid #e8eef6;
-  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.03);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 
 /* 蓝色气泡留给访客（访客窗口里"自己说的"就是蓝色），人工客服走默认白底 */
 .is-customer .msg-bubble {
   background: #2563eb;
   border-color: #2563eb;
+  border-top-left-radius: 12px;
+  border-top-right-radius: 4px;
 }
 
 .is-note .msg-bubble {
@@ -1971,12 +2602,47 @@ function fullTime(value?: string | null) {
   box-shadow: none;
 }
 
+/* 机器人正在输入：和访客窗口一致的三点跳动 */
+.msg-bubble.is-typing {
+  padding: 10px 14px;
+}
+
+.typing-dots {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  height: 14px;
+}
+
+.typing-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #b6c2d4;
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+
+.typing-dots i:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.55; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+.msg-card-note {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #b45309;
+}
+
 .msg-meta {
   font-size: 11px;
   color: #94a3b8;
   margin-bottom: 3px;
 }
 
+/* 客户说的话是蓝底，meta 行（客户名）要用浅蓝，别再用默认灰 */
 .is-customer .msg-meta {
   color: #c7dbff;
 }
@@ -1987,6 +2653,20 @@ function fullTime(value?: string | null) {
   font-size: 11px;
   color: #a3aec2;
   text-align: left;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+/* 时间只在需要时出现：悬停这条消息（或触屏）就能看到 */
+.msg-row:hover .msg-time,
+.msg-row:focus-within .msg-time,
+.msg-bubble.is-pending .msg-time,
+.msg-bubble.is-failed .msg-time {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .msg-time { opacity: 0.75; }
 }
 
 .is-customer .msg-time {

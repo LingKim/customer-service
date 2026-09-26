@@ -143,9 +143,29 @@ _CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
 _ASCII_RUN = re.compile(r"[A-Za-z0-9]+")
 MAX_QUERY_TERMS = 20
 
+# 虚词字表：用于把"可以 / 之后 / 多久 / 久可 / 以到"这类纯虚词片段从查询里剔掉。
+#
+# 为什么必须剔：中文没有分词时靠"相邻两字"凑片段，一句"退款之后多久可以到账？"
+# 会切出 9 个片段，其中 7 个是虚词组合。它们在语料里到处都是，
+# 于是"退款开票怎么处理""价保规则"这种沾边的块能靠一个"可以"拿到分数，
+# 把真正写着"退款到账时效"的那一块挤出 top_k——模型拿到的全是无关资料，
+# 只能如实回一句"资料里没有提到退款到账的时效"，看起来就像"知识库没用"。
+#
+# 规则定得很保守：**整条片段都由虚词字组成才丢**。
+# 所以"到账"（到是虚词、账不是）会保留，"退货""退款"更不会受影响。
+FUNCTION_CHARS = set(
+    "的了着过吗呢吧啊呀么什怎为可以之后多久能会要想请问你我他她它们这那哪些个"
+    "是有没不就都也还再又很太好给让把被在和与或及等至从对上下里外另还用做来说去"
+    "把被叫让给跟向对为于"
+)
+
 
 def query_terms(query: str, max_terms: int = MAX_QUERY_TERMS) -> list[str]:
-    """把查询拆成可匹配的片段：中文取相邻两字，英文数字取整词，去重后最多 20 个。"""
+    """把查询拆成可匹配的片段：中文取相邻两字，英文数字取整词，去重后最多 20 个。
+
+    纯虚词组成的片段（可以 / 之后 / 多久…）会被丢掉：它们对"这段话在问什么"
+    没有任何区分度，留着只会把噪音文档顶上来，见 ``FUNCTION_CHARS`` 的说明。
+    """
     text = (query or "").strip()
     if not text:
         return []
@@ -161,8 +181,17 @@ def query_terms(query: str, max_terms: int = MAX_QUERY_TERMS) -> list[str]:
     for term in terms:
         if term not in seen:
             seen.add(term)
+            if _is_function_fragment(term):
+                continue
             result.append(term)
     return result[:max_terms]
+
+
+def _is_function_fragment(term: str) -> bool:
+    """整条片段是否都由虚词字组成（是的话就没有检索价值）。"""
+    if len(term) != 2:
+        return False
+    return all(char in FUNCTION_CHARS for char in term)
 
 
 def keyword_search(tenant_code: str, query: str, top_k: int = 5) -> list[dict]:

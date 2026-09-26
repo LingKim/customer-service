@@ -79,10 +79,24 @@ public class RealtimeQaService {
             "保证一定", "保证肯定", "百分百解决", "百分百可以", "百分百能", "一定能", "肯定能",
             "绝对能", "绝对没问题", "永久免费", "永久有效", "永久保修", "包您满意", "包退包换");
 
-    /** 客户情绪激动的信号词 */
-    private static final List<String> NEGATIVE_WORDS = List.of(
-            "投诉", "差评", "退钱", "退款", "生气", "垃圾", "太差", "恶心", "坑人",
-            "骗子", "曝光", "起诉", "气死", "什么态度", "没人管", "叫你们领导");
+    /**
+     * 客户情绪激动的**强信号**：这些词本身就是"我不满、我要闹"，命中就算情绪激动。
+     *
+     * <p>注意千万别往里塞业务词——早先这个表里有"退款""退钱"，于是客户正常问一句
+     * "退款多久能到账？"也被当成"情绪激动"，接下来坐席只要没先说"抱歉"，
+     * 哪怕他只回了个"你好"，都会被打上"情绪安抚"的质检命中。这种误报最伤信任：
+     * 坐席会开始无视所有预警。</p>
+     */
+    private static final List<String> ANGER_WORDS = List.of(
+            "投诉", "差评", "曝光", "起诉", "举报", "骗子", "垃圾", "恶心", "气死",
+            "什么态度", "没人管", "叫你们领导", "太差", "坑人", "气人", "太垃圾", "滚");
+
+    /** 一般不满：单独出现不算激动，得配合强调语气（连续感叹号/问号）才触发 */
+    private static final List<String> UNHAPPY_WORDS = List.of(
+            "生气", "不满", "怎么回事", "搞什么", "还没", "一直没", "催", "急", "失望");
+
+    /** 强调语气：连续感叹号 / 问号，或者"？？？"这种追问 */
+    private static final Pattern EMPHATIC = Pattern.compile("[!！?？]{2,}");
 
     /** 客服先安抚再说事：命中任意一个就算已经安抚过 */
     private static final List<String> SOOTHING_WORDS = List.of(
@@ -138,7 +152,7 @@ public class RealtimeQaService {
         }
         boolean fromAgent = senderType == SessionService.SENDER_AGENT;
         // 情绪安抚要结合上下文：先看客户上一条是不是在发火
-        String previousCustomer = fromAgent
+        SessionMessage previousCustomer = fromAgent
                 ? lastCustomerMessage(tenantCode, session.getId(), messageId)
                 : null;
         List<AlertVO> created = new ArrayList<>();
@@ -147,6 +161,11 @@ public class RealtimeQaService {
             if (hit == null) {
                 continue;
             }
+            // 情绪安抚这条告警说的是**客户那条**有问题（客户情绪激动、坐席没安抚），
+            // 所以标记要落在客户的消息上：坐席看到"这条客户消息需要安抚"，
+            // 而不是自己回个"你好"被打上"质检命中"（那样坐席只会觉得系统在乱报）。
+            boolean onCustomer = Integer.valueOf(RULE_EMOTION).equals(rule.getRuleType())
+                    && previousCustomer != null;
             LocalDateTime now = LocalDateTime.now();
             QaAlert alert = QaAlert.builder()
                     .id(idGenerator.nextId())
@@ -154,8 +173,8 @@ public class RealtimeQaService {
                     .sessionId(session.getId())
                     .sessionNo(session.getSessionNo())
                     .agentId(session.getAgentId())
-                    .messageId(messageId)
-                    .messageSeq(messageSeq)
+                    .messageId(onCustomer ? previousCustomer.getId() : messageId)
+                    .messageSeq(onCustomer ? previousCustomer.getSeq() : messageSeq)
                     .ruleId(rule.getId())
                     .ruleName(rule.getRuleName())
                     .ruleType(rule.getRuleType())
@@ -291,7 +310,7 @@ public class RealtimeQaService {
     }
 
     /** 三类实时规则判定：命中返回 Hit，没命中返回 null */
-    private Hit detect(QaRule rule, String content, boolean fromAgent, String previousCustomer) {
+    private Hit detect(QaRule rule, String content, boolean fromAgent, SessionMessage previousCustomer) {
         int type = rule.getRuleType() == null ? 0 : rule.getRuleType();
         int severity = rule.getSeverity() == null ? SEVERITY_WARN : rule.getSeverity();
         if (type == RULE_KEYWORD) {
@@ -316,18 +335,43 @@ public class RealtimeQaService {
                     ADVICE_PROMISE, severity);
         }
         if (type == RULE_EMOTION) {
+            // 情绪安抚只查"坐席回复"这一侧：客户在发火、坐席却没安抚，才需要提醒。
+            // 而且判据要严一点——先看客户上一条是不是**真的**情绪激动（见 isUpset）
             if (!fromAgent || previousCustomer == null) {
                 return null;
             }
-            if (!containsAny(previousCustomer, NEGATIVE_WORDS)) {
+            String customerText = previousCustomer.getContent();
+            String signal = upsetSignal(customerText);
+            if (signal == null) {
                 return null;
             }
             if (containsAny(content, SOOTHING_WORDS)) {
                 return null;
             }
-            String signal = firstMatch(previousCustomer, NEGATIVE_WORDS);
-            return new Hit(signal, snippetAround(previousCustomer, previousCustomer.indexOf(signal)),
+            return new Hit(signal, snippetAround(customerText, customerText.indexOf(signal)),
                     ADVICE_EMOTION, severity);
+        }
+        return null;
+    }
+
+    /**
+     * 客户上一条到底算不算"情绪激动"，命中就返回信号词（用于展示），否则返回 null。
+     *
+     * <p>两档判据：</p>
+     * <ul>
+     *   <li><b>强信号</b>：投诉 / 差评 / 骗子 / 气死… 这类词本身就说明在发火，直接算；</li>
+     *   <li><b>一般不满 + 强调语气</b>："怎么回事""还没"这类词单独出现太常见（"退款还没到"就是正常咨询），
+     *       必须配合连续感叹号/问号才算激动，避免把普通追问当成吵架。</li>
+     * </ul>
+     */
+    private String upsetSignal(String customerMessage) {
+        String strong = firstMatch(customerMessage, ANGER_WORDS);
+        if (strong != null) {
+            return strong;
+        }
+        String weak = firstMatch(customerMessage, UNHAPPY_WORDS);
+        if (weak != null && EMPHATIC.matcher(customerMessage).find()) {
+            return weak;
         }
         return null;
     }
@@ -351,14 +395,14 @@ public class RealtimeQaService {
         return words;
     }
 
-    /** 这一句之前，客户最近说过的一句话（情绪判定要看它） */
-    private String lastCustomerMessage(String tenantCode, Long sessionId, Long beforeId) {
+    /** 坐席这条消息之前、客户最近说过的一句（用来判断"客户是不是在发火"） */
+    private SessionMessage lastCustomerMessage(String tenantCode, Long sessionId, Long beforeId) {
         List<SessionMessage> rows = sessionMessageMapper.selectBySession(
                 tenantCode, sessionId, beforeId, SessionService.VISIBLE_ALL, CONTEXT_LOOKBACK);
         for (SessionMessage row : rows) {
             if (Integer.valueOf(SessionService.SENDER_CUSTOMER).equals(row.getSenderType())
                     && row.getContent() != null && !row.getContent().isBlank()) {
-                return row.getContent();
+                return row;
             }
         }
         return null;

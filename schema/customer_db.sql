@@ -230,6 +230,7 @@ CREATE TABLE IF NOT EXISTS "session" (
   "agent_id" BIGINT DEFAULT NULL,
   "intent" VARCHAR(64) DEFAULT NULL,
   "emotion" VARCHAR(20) DEFAULT NULL,
+  "bot_transfer_reason" VARCHAR(255) DEFAULT NULL,
   "source" VARCHAR(20) DEFAULT NULL,
   "start_time" TIMESTAMP NOT NULL,
   "end_time" TIMESTAMP DEFAULT NULL,
@@ -254,6 +255,7 @@ COMMENT ON COLUMN "session"."skill_group_id" IS '技能组ID';
 COMMENT ON COLUMN "session"."agent_id" IS '当前坐席用户ID';
 COMMENT ON COLUMN "session"."intent" IS '当前意图';
 COMMENT ON COLUMN "session"."emotion" IS '情绪标签';
+COMMENT ON COLUMN "session"."bot_transfer_reason" IS '机器人转人工的原因';
 COMMENT ON COLUMN "session"."source" IS '来源：微信、App、网站等渠道';
 COMMENT ON COLUMN "session"."start_time" IS '开始时间';
 COMMENT ON COLUMN "session"."end_time" IS '结束时间';
@@ -364,13 +366,13 @@ CREATE TABLE IF NOT EXISTS "session_event" (
   "remark" VARCHAR(255) DEFAULT NULL,
   "event_time" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "create_time" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT ck_session_event_event_type CHECK ("event_type" IN (1,2,3,4,5)),
+  CONSTRAINT ck_session_event_event_type CHECK ("event_type" IN (1,2,3,4,5,6)),
   PRIMARY KEY ("id")
 );
 COMMENT ON TABLE "session_event" IS '会话事件表';
 COMMENT ON COLUMN "session_event"."id" IS '主键ID（雪花算法生成）';
 COMMENT ON COLUMN "session_event"."session_id" IS '会话ID';
-COMMENT ON COLUMN "session_event"."event_type" IS '事件类型码：1-转接、2-升级、3-分配、4-关闭、5-超时';
+COMMENT ON COLUMN "session_event"."event_type" IS '事件类型码：1-转接、2-升级、3-分配、4-关闭、5-超时、6-机器人转人工';
 COMMENT ON COLUMN "session_event"."operator_id" IS '操作人ID';
 COMMENT ON COLUMN "session_event"."from_value" IS '来源值（原坐席/原技能组）';
 COMMENT ON COLUMN "session_event"."to_value" IS '目标值';

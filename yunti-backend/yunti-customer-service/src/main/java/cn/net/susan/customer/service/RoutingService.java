@@ -1,6 +1,7 @@
 package cn.net.susan.customer.service;
 
 import cn.net.susan.common.exception.BizException;
+import cn.net.susan.customer.entity.AgentStatus;
 import cn.net.susan.customer.entity.Session;
 import cn.net.susan.customer.entity.SkillGroup;
 import cn.net.susan.customer.mapper.AgentStatusMapper;
@@ -131,6 +132,9 @@ public class RoutingService {
         }
         Candidate candidate = pick(tenantCode, session);
         if (candidate == null) {
+            // 找不到人时必须说清楚"为什么"，否则现象就是"客户一直在排队"，
+            // 而日志里一个字都没有——排查只能靠猜。
+            logNoCandidate(tenantCode, session);
             return false;
         }
         try {
@@ -149,6 +153,93 @@ public class RoutingService {
     }
 
     /**
+     * 记一条"没人可派"的原因。
+     *
+     * <p>按租户限流（30 秒一次）：排队调度每 10 秒扫一轮，不限流会把日志刷满；
+     * 但完全不打又会让"客户一直排队"彻底无从查起。</p>
+     */
+    private void logNoCandidate(String tenantCode, Session session) {
+        long now = System.currentTimeMillis();
+        Long last = lastNoCandidateLog.get(tenantCode);
+        if (last != null && now - last < NO_CANDIDATE_LOG_INTERVAL) {
+            return;
+        }
+        lastNoCandidateLog.put(tenantCode, now);
+
+        Long groupId = session.getSkillGroupId();
+        List<Map<String, Object>> online = agentStatusMapper.selectCandidates(tenantCode, null);
+        if (online.isEmpty()) {
+            log.warn("没人可派：租户 {} 当前没有【在线·可接单 + 长连接在线】的坐席，会话 {} 只能留在队列里。"
+                            + "让坐席打开在线客服工作台并把状态切成「在线·可接单」即可自动接入",
+                    tenantCode, session.getSessionNo());
+            return;
+        }
+        // 有人在线但没被选中：说明卡在技能组这一层。把两边的名单都打出来，
+        // 这样"我明明把苏三加进组了"能一眼对上——通常是**渠道绑的组**和**加人的组**不是同一个。
+        SkillGroup group = groupId == null ? null : skillGroupMapper.selectById(groupId);
+        int overflowSeconds = group == null || group.getOverflowAfterSeconds() == null
+                ? DEFAULT_OVERFLOW_SECONDS : group.getOverflowAfterSeconds();
+        List<Long> groupMembers = groupId == null ? List.of() : memberMapper.selectList(
+                        Wrappers.<SkillGroupMember>lambdaQuery()
+                                .eq(SkillGroupMember::getTenantCode, tenantCode)
+                                .eq(SkillGroupMember::getSkillGroupId, groupId)
+                                .eq(SkillGroupMember::getStatus, 1)
+                                .eq(SkillGroupMember::getDeleted, false))
+                .stream().map(SkillGroupMember::getUserId).toList();
+        List<Long> onlineIds = online.stream()
+                .map(row -> longValue(row.get("agent_id"))).toList();
+        log.warn("没人可派：租户 {} 当前【在线·可接单 + 长连接在线】的坐席是 {}，"
+                        + "而会话 {} 绑的技能组 {}（{}）的启用成员是 {}；该组排队升级时长={}秒",
+                tenantCode, onlineIds, session.getSessionNo(),
+                groupId, group == null ? "已删除" : group.getName(),
+                groupMembers, overflowSeconds);
+        // 把"组内有谁、各自什么状态"逐行打出来：这才能回答
+        // "我明明看到苏三在组里，为什么不算"——绝大多数是 status=忙碌/小休，或者 is_connected=false
+        for (Long memberId : groupMembers) {
+            AgentStatus status = agentStatusMapper.selectList(Wrappers.<AgentStatus>lambdaQuery()
+                            .eq(AgentStatus::getTenantCode, tenantCode)
+                            .eq(AgentStatus::getAgentId, memberId)
+                            .eq(AgentStatus::getDeleted, false)
+                            .last("LIMIT 1"))
+                    .stream().findFirst().orElse(null);
+            if (status == null) {
+                log.warn("    · 组内成员 {}：还没有坐席状态记录（没登录过工作台）", memberId);
+                continue;
+            }
+            int max = status.getMaxConcurrency() == null ? 5 : status.getMaxConcurrency();
+            long active = sessionMapper.selectCount(Wrappers.<Session>lambdaQuery()
+                    .eq(Session::getTenantCode, tenantCode)
+                    .eq(Session::getAgentId, memberId)
+                    .eq(Session::getStatus, SessionService.STATUS_AGENT)
+                    .eq(Session::getDeleted, false));
+            boolean eligible = Integer.valueOf(1).equals(status.getStatus())
+                    && Boolean.TRUE.equals(status.getIsConnected());
+            if (eligible && active >= max) {
+                // 最常见的一种"我明明在线却没派给我"：接待量已经到上限（会话没结束就一直占着）
+                log.warn("    · 组内成员 {}：在线可接单，但**已接待 {}/{} 单**（达到上限，路由不再派新会话）"
+                                + " → 结束掉已处理完的会话，或调大「最多同时接待数」",
+                        memberId, active, max);
+                continue;
+            }
+            if (onlineIds.contains(memberId)) {
+                continue;   // 能派的人上面已经列过，不重复刷
+            }
+            log.warn("    · 组内成员 {}：status={}（1在线/2忙碌/3小休） is_connected={} 已接待={}/{}"
+                            + " → 本轮不可派（状态不是在线，或长连接未就绪）",
+                    memberId, status.getStatus(), status.getIsConnected(), active, max);
+        }
+        if (groupMembers.isEmpty()) {
+            log.warn("    · 该组一个启用成员都没有：请到「技能组 → 配置坐席」把人加进去，"
+                    + "或到「渠道接入」把渠道改绑到有人的组（路由遇到空组会当场放宽到全部在线坐席）");
+        }
+    }
+
+    /** "没人可派"日志的限流：同一租户多久最多记一次 */
+    private static final long NO_CANDIDATE_LOG_INTERVAL = 30_000L;
+
+    private final Map<String, Long> lastNoCandidateLog = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
      * 通知坐席"你被派单了"；放在事务提交之后发，避免坐席收到通知去拉列表时还没提交。
      */
     private void notifyAssignedAfterCommit(String tenantCode, long agentId, String sessionNo) {
@@ -156,12 +247,24 @@ public class RoutingService {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    notifyClient.notifyAssigned(tenantCode, agentId, sessionNo, SOURCE_ROUTING);
+                    pushAssigned(tenantCode, agentId, sessionNo);
                 }
             });
             return;
         }
+        pushAssigned(tenantCode, agentId, sessionNo);
+    }
+
+    /**
+     * 自动派单后的两个通知：一个给坐席（你被派单了），一个给会话里的所有人（含客户）。
+     *
+     * <p>第二个千万不能少：只有在工作台手点「接入会话」时，客户才会因为长连接广播而看到
+     * "人工客服已接入"；自动派单发生在服务端，不主动同步的话，客户会一直停在
+     * "正在为您转接人工客服，请稍候"，以为没人管。</p>
+     */
+    private void pushAssigned(String tenantCode, long agentId, String sessionNo) {
         notifyClient.notifyAssigned(tenantCode, agentId, sessionNo, SOURCE_ROUTING);
+        notifyClient.notifyClaimed(tenantCode, sessionNo, agentId);
     }
 
     /**
@@ -173,11 +276,30 @@ public class RoutingService {
         if (inGroup != null) {
             return inGroup;
         }
-        if (skillGroupId == null || !overflowReached(tenantCode, skillGroupId, session)) {
+        if (skillGroupId == null) {
+            return null;
+        }
+        // 升级（放宽技能组）的两个入口：
+        //   ① 等超过组上配的"排队升级时长"；
+        //   ② 这个组**一个人都没有**——那等多久都不会有人来接，属于配置成了死路
+        //      （常发生在：渠道绑了一个建好没加人的组，而该组升级时长又是 0=不升级）。
+        //      直接按"不限技能组"处理，别让客户干等。
+        if (!overflowReached(tenantCode, skillGroupId, session)
+                && !groupHasNoMember(tenantCode, skillGroupId)) {
             return null;
         }
         // 排队超时：放宽技能组限制，交给其它在线坐席
         return firstAvailable(agentStatusMapper.selectCandidates(tenantCode, null), true);
+    }
+
+    /** 这个技能组是不是一个人都没有（没有任何启用成员） */
+    private boolean groupHasNoMember(String tenantCode, Long skillGroupId) {
+        Long members = memberMapper.selectCount(Wrappers.<SkillGroupMember>lambdaQuery()
+                .eq(SkillGroupMember::getTenantCode, tenantCode)
+                .eq(SkillGroupMember::getSkillGroupId, skillGroupId)
+                .eq(SkillGroupMember::getStatus, 1)
+                .eq(SkillGroupMember::getDeleted, false));
+        return members == null || members == 0;
     }
 
     /**

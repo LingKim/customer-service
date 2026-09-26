@@ -9,6 +9,8 @@ export interface BotIntent {
   confidence?: number | null
   hitCount: number
   samples?: string
+  /** 命中该意图是否直接转人工（人工客服、投诉这类） */
+  escalate?: boolean
   updateTime?: string
 }
 
@@ -17,7 +19,12 @@ export interface BotSetting {
   welcomeMessage?: string
   fallbackMessage?: string
   transferPrompt?: string
+  transferMessage?: string
   isEnabled: boolean
+  receptionEnabled: boolean
+  transferOnAnger: boolean
+  transferAfterUnresolved: number
+  transferKeywords?: string
   modelKey?: string
   temperature: number
 }
@@ -30,6 +37,27 @@ export interface BotModel {
   modelType: number
   temperature: number
   isEnabled: boolean
+}
+
+export interface BotDialogue {
+  sessionNo: string
+  lastIntent?: string
+  lastConfidence?: number
+  lastEmotion?: string
+  turnCount: number
+  slots?: string
+  lastMessage?: string
+  transferred: boolean
+  transferReason?: string
+  updateTime?: string
+}
+
+export interface BotIntentStats {
+  totalTurns: number
+  totalSessions: number
+  transferredSessions: number
+  byIntent: Array<{ intent: string; sessions: number; transferred: number }>
+  byEmotion: Array<{ emotion: string; sessions: number }>
 }
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
@@ -45,6 +73,10 @@ const DEFAULT_SETTING: BotSetting = {
   botName: '小云', welcomeMessage: '您好，我是云梯智能客服小云。',
   fallbackMessage: '抱歉，我暂时无法准确回答您的问题。', transferPrompt: '如需人工客服，请回复“转人工”。',
   isEnabled: true, modelKey: 'qwen-plus', temperature: 0.35,
+  transferMessage: '好的，正在为您转接人工客服，请稍候。',
+  receptionEnabled: true, transferOnAnger: true,
+  transferAfterUnresolved: 2,
+  transferKeywords: '转人工,人工客服,找人工,要人工,人工',
 }
 
 function readIntents(): BotIntent[] {
@@ -63,11 +95,11 @@ export function listBotIntents(): Promise<BotIntent[]> {
   return request({ url: '/ai/v1/bot/intents', method: 'get' })
 }
 
-export function createBotIntent(data: { name: string; samples?: string }): Promise<BotIntent> {
+export function createBotIntent(data: { name: string; samples?: string; escalate?: boolean }): Promise<BotIntent> {
   if (USE_MOCK) {
     const intent: BotIntent = {
       id: String(Date.now()), intentCode: `IT${Date.now()}`, name: data.name,
-      samples: data.samples, status: 1, confidence: null, hitCount: 0,
+      samples: data.samples, escalate: data.escalate, status: 1, confidence: null, hitCount: 0,
     }
     writeIntents([intent, ...readIntents()])
     return Promise.resolve(intent)
@@ -75,7 +107,7 @@ export function createBotIntent(data: { name: string; samples?: string }): Promi
   return request({ url: '/ai/v1/bot/intents', method: 'post', data })
 }
 
-export function updateBotIntent(id: string, data: { name?: string; samples?: string; status?: number }): Promise<void> {
+export function updateBotIntent(id: string, data: { name?: string; samples?: string; status?: number; escalate?: boolean }): Promise<void> {
   if (USE_MOCK) {
     writeIntents(readIntents().map((intent) => intent.id === id ? { ...intent, ...data } : intent))
     return Promise.resolve()
@@ -108,4 +140,16 @@ export function selectBotModel(data: { modelKey: string; temperature: number }):
     return Promise.resolve()
   }
   return request({ url: '/ai/v1/bot/model', method: 'put', data })
+}
+
+export function listBotDialogues(limit = 50): Promise<BotDialogue[]> {
+  if (USE_MOCK) return Promise.resolve([])
+  return request({ url: '/ai/v1/bot/dialogues', method: 'get', params: { limit } })
+}
+
+export function getBotIntentStats(): Promise<BotIntentStats> {
+  if (USE_MOCK) return Promise.resolve({
+    totalTurns: 0, totalSessions: 0, transferredSessions: 0, byIntent: [], byEmotion: [],
+  })
+  return request({ url: '/ai/v1/bot/intent-stats', method: 'get' })
 }

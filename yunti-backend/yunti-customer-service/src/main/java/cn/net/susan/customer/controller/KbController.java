@@ -48,6 +48,13 @@ public class KbController {
         return ApiResponse.ok(kbService.overview(jwtTokenParser.requireLoginUser(authorization)));
     }
 
+    @GetMapping("/health")
+    public ApiResponse<Map<String, Object>> health(
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        return ApiResponse.ok(kbService.health(jwtTokenParser.requireLoginUser(authorization)));
+    }
+
     /** 文档列表 */
     @GetMapping("/documents")
     public ApiResponse<List<KbService.DocVO>> documents(

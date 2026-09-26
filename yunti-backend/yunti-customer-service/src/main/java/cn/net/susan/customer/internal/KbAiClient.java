@@ -212,6 +212,50 @@ public class KbAiClient {
         return result;
     }
 
+    /** 读取向量质量与来源；仅供显式启用的修复流程使用。 */
+    public Map<String, Object> healthDetail() {
+        requireInternalSecret();
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + "/api/ai/v1/kb/health"))
+                    .timeout(Duration.ofSeconds(8))
+                    .header("X-Yunti-Internal-Secret", internalSharedSecret)
+                    .GET()
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new BizException(50001, "知识库体检失败：HTTP " + response.statusCode());
+            }
+            return objectMapper.readValue(response.body(), new TypeReference<>() {});
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BizException(50001, "知识库体检失败：" + friendly(e));
+        }
+    }
+
+    public Map<String, Object> healthDetail(String tenantCode) {
+        requireInternalSecret();
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + "/api/ai/v1/kb/health?tenant_code=" + enc(tenantCode)))
+                    .timeout(Duration.ofSeconds(8))
+                    .header("X-Tenant-Code", tenantCode)
+                    .header("X-Yunti-Internal-Secret", internalSharedSecret)
+                    .GET()
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new BizException(50001, "知识库体检失败：HTTP " + response.statusCode());
+            }
+            return objectMapper.readValue(response.body(), new TypeReference<>() {});
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BizException(50001, "知识库体检失败：" + friendly(e));
+        }
+    }
+
     private boolean probe() {
         try {
             if (internalSharedSecret == null || internalSharedSecret.isBlank()) return false;

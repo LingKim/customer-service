@@ -41,10 +41,26 @@ export interface OutboxItem {
 export interface RealtimeClientOptions {
   /** 访问令牌：坐席用登录令牌，访客用访客令牌 */
   token: string
+  /**
+   * 每次建连前取一次令牌。
+   *
+   * <p>为什么要这个：令牌是有有效期的（登录令牌 12 小时，访客令牌 12 小时），
+   * 而一个工作台标签页可能开一整天。如果只在 new RealtimeClient 时取一次，
+   * 令牌过期后每次重连都用的是那份死令牌——服务端一直回"访问令牌无效或已过期"，
+   * 客户端却只看到"连不上"，于是无限重连、界面还显示登录正常。</p>
+   */
+  tokenProvider?: () => string
   /** 收到服务端消息 */
   onMessage: (message: RealtimeMessage) => void
   /** 连接状态变化 */
   onStateChange?: (state: RealtimeState) => void
+  /**
+   * 判定令牌不可用时的回调（连续多次连不上，或服务端明确回了 40100）。
+   *
+   * <p>页面接到回调后去确认一次登录态即可：令牌真过期就按登录失效处理，
+   * 服务没起/网络断则什么都不用做，继续重连。</p>
+   */
+  onAuthFailed?: (reason?: string) => void
   /** 心跳间隔（毫秒），默认 30 秒 */
   heartbeatMs?: number
   /** 单条消息等待 ACK 的超时（毫秒），默认 8 秒 */
@@ -69,6 +85,10 @@ const BASE_RECONNECT_DELAY = 1000
 const MAX_SEND_ATTEMPTS = 6
 /** 自动重发间隔 */
 const RETRY_INTERVAL = 4000
+/** 连续连不上几次之后，让页面去确认一次登录态（多用几次，避免网络抖动就误报） */
+const AUTH_PROBE_AFTER_FAILURES = 3
+/** 同一轮里最多多久提示一次"令牌可能失效"，免得刷屏 */
+const AUTH_NOTIFY_COOLDOWN = 5 * 60 * 1000
 /** 发件箱持久化 key：刷新页面也能把没确认的消息补发出去 */
 const OUTBOX_KEY = 'yunti_realtime_outbox'
 const OUTBOX_LIMIT = 50
@@ -86,6 +106,10 @@ export class RealtimeClient {
   private seq = 0
   private retryTimer: number | undefined
   private readonly pending = new Map<string, PendingMessage>()
+  /** 连续建连失败次数：成功一次就清零 */
+  private connectFailures = 0
+  /** 上次提示"令牌可能失效"的时间 */
+  private authNotifiedAt = 0
 
   constructor(options: RealtimeClientOptions) {
     this.options = {
@@ -127,8 +151,10 @@ export class RealtimeClient {
    * 期间断线、刷新、超时都不会把消息丢掉——重连后会用同一个 clientMsgNo 重发，
    * 服务端按幂等键去重，所以既能补发又不会重复。</p>
    */
-  send(payload: Omit<RealtimeMessage, 'clientMsgNo'>): Promise<RealtimeMessage> {
-    const clientMsgNo = this.nextClientMsgNo()
+  send(payload: Omit<RealtimeMessage, 'clientMsgNo'> & { clientMsgNo?: string }): Promise<RealtimeMessage> {
+    // 允许调用方自带消息号：页面要把"本地乐观气泡"和"服务端回执"对上号
+    // （ACK 迟到、断线重发这些情况下，只靠内部自增号，页面就只能干看着两个气泡）
+    const clientMsgNo = payload.clientMsgNo || this.nextClientMsgNo()
     const message: RealtimeMessage = { ...payload, clientMsgNo }
     return new Promise<RealtimeMessage>((resolve, reject) => {
       this.pending.set(clientMsgNo, { payload: message, resolve, reject, timer: 0, attempts: 0 })
@@ -169,7 +195,14 @@ export class RealtimeClient {
 
   private open(): void {
     this.setState(this.reconnectAttempt === 0 ? 'connecting' : 'reconnecting')
-    const url = `${resolveWsBase()}/ws/realtime?token=${encodeURIComponent(this.options.token)}`
+    // 每次建连都重新取一次令牌：标签页开久了，建对象时那份早就过期了
+    const token = (this.options.tokenProvider?.() || this.options.token || '').trim()
+    if (!token) {
+      // 连令牌都没有，重试多少次都没用，直接交给页面处理
+      this.notifyAuthFailed('本地没有访问令牌')
+      return
+    }
+    const url = `${resolveWsBase()}/ws/realtime?token=${encodeURIComponent(token)}`
     let socket: WebSocket
     try {
       socket = new WebSocket(url)
@@ -181,6 +214,7 @@ export class RealtimeClient {
 
     socket.onopen = () => {
       this.reconnectAttempt = 0
+      this.connectFailures = 0
       this.setState('open')
       this.startHeartbeat()
       // 断线期间没发出去的消息，连上后立刻补发
@@ -207,14 +241,24 @@ export class RealtimeClient {
           item.resolve(message)
         }
       }
+      // 服务端明确说令牌不行：立刻交给页面确认登录态，别等到重试次数堆满
+      if (message.type === 'ERROR' && (message.code === 40100 || message.code === 40110)) {
+        this.notifyAuthFailed(message.message)
+      }
       this.options.onMessage(message)
     }
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       this.stopHeartbeat()
       if (this.manualClosed) {
         this.setState('closed')
         return
+      }
+      this.connectFailures += 1
+      // 握手被拒（401）时浏览器只给一个笼统的 1006，客户端分不清"令牌过期"和"服务没起"，
+      // 所以这里不猜：连续失败几次就把问题抛给页面，由它用一次真实请求去确认登录态。
+      if (this.connectFailures >= AUTH_PROBE_AFTER_FAILURES) {
+        this.notifyAuthFailed(`连续 ${this.connectFailures} 次连接失败（close code=${event?.code ?? '-'}）`)
       }
       this.scheduleReconnect()
     }
@@ -377,6 +421,21 @@ export class RealtimeClient {
     }
     this.state = state
     this.options.onStateChange?.(state)
+  }
+
+  /**
+   * 通知页面"令牌可能不可用"。
+   *
+   * <p>带冷却时间：连接一直失败时 onclose 会反复触发，不去重的话页面会被刷爆
+   * （而且用户看到的提示会一直闪）。</p>
+   */
+  private notifyAuthFailed(reason?: string): void {
+    const now = Date.now()
+    if (now - this.authNotifiedAt < AUTH_NOTIFY_COOLDOWN) {
+      return
+    }
+    this.authNotifiedAt = now
+    this.options.onAuthFailed?.(reason)
   }
 
   private clearTimers(): void {

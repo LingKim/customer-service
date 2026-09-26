@@ -103,6 +103,22 @@ public class PresenceController {
     }
 
     /**
+     * 内部接口：会话被自动分配（智能路由 / 机器人转人工）后，把状态同步给会话里的所有人。
+     *
+     * <p>坐席手点「接入会话」走长连接、天然会广播；自动分配发生在 customer-service，
+     * 不通知一次的话，客户会一直停在"正在为您转接人工客服，请稍候"。</p>
+     */
+    @PostMapping("/internal/claimed")
+    public ApiResponse<Map<String, Object>> claimed(@RequestBody ClaimedBody body) {
+        int delivered = handler.notifyClaimed(body.tenantCode(), body.sessionNo(), body.agentId());
+        return ApiResponse.ok(Map.of("delivered", delivered));
+    }
+
+    /** 会话已被接入的同步请求体 */
+    public record ClaimedBody(String tenantCode, String sessionNo, Long agentId) {
+    }
+
+    /**
      * 内部接口：customer-service 实时质检命中后调用，把预警推给这条会话的坐席。
      */
     @PostMapping("/internal/qa-alert")
@@ -117,5 +133,61 @@ public class PresenceController {
 
     /** 实时质检预警请求体 */
     public record QaAlertBody(String tenantCode, String sessionNo, Long agentId, Map<String, Object> payload) {
+    }
+
+    /**
+     * 内部接口：customer-service 落了一条"机器人回复 / 系统提示"后调用，让长连接广播出去。
+     *
+     * <p>机器人回复不是从前端长连接发起的，长连接手里没有这条消息；
+     * 不推一次，访客就只能靠刷新页面才看到机器人回了什么。</p>
+     */
+    @PostMapping("/internal/message")
+    public ApiResponse<Map<String, Object>> message(@RequestBody NotifyMessageBody body) {
+        int delivered = handler.notifyMessage(
+                body.tenantCode(), body.sessionNo(), body.message(),
+                body.refreshAgents() == null || body.refreshAgents());
+        return ApiResponse.ok(Map.of("delivered", delivered));
+    }
+
+    /** 广播消息请求体 */
+    public record NotifyMessageBody(
+            String tenantCode,
+            String sessionNo,
+            Map<String, Object> message,
+            Boolean refreshAgents
+    ) {
+    }
+
+    /**
+     * 内部接口：customer-service 通知"机器人/坐席正在输入"，由长连接推给双方。
+     *
+     * <p>客户发完消息到机器人答上来有几秒，中间没有任何反馈，客户会怀疑消息没发出去。</p>
+     */
+    @PostMapping("/internal/typing")
+    public ApiResponse<Map<String, Object>> typing(@RequestBody TypingBody body) {
+        int delivered = handler.notifyTyping(
+                body.tenantCode(), body.sessionNo(), body.who(), body.typing() == null || body.typing());
+        return ApiResponse.ok(Map.of("delivered", delivered));
+    }
+
+    /** 输入状态请求体 */
+    public record TypingBody(String tenantCode, String sessionNo, String who, Boolean typing) {
+    }
+
+    /**
+     * 内部接口：探活 + 版本自证。
+     *
+     * <p>customer-service 靠它判断"对面这个实时网关是不是新版"——
+     * 旧版没有 /internal/message，机器人回复推不出去，现象却是"机器人不回话"，
+     * 查起来很绕。这里把版本能力直接写在返回里。</p>
+     */
+    @GetMapping("/internal/health")
+    public ApiResponse<Map<String, Object>> health() {
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("status", "UP");
+        // 这一项是"版本指纹"：旧版没有 /internal/message，机器人回复推不出去
+        body.put("internalMessage", true);
+        body.put("connections", registry.totalConnections());
+        return ApiResponse.ok(body);
     }
 }

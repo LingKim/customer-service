@@ -181,15 +181,83 @@ def delete_chunks(
 
 
 @router.get("/health")
-def kb_health() -> dict:
+def kb_health(request: Request, tenant_code: str | None = None) -> dict:
     """知识库探活：库连不上或没装 pgvector 时这里会是 DOWN。"""
+    if tenant_code:
+        require_tenant_header(request, tenant_code)
     ok = store.ping()
-    return {
+    result = {
         "status": "UP" if ok else "DOWN",
         "vectorStore": "pgvector",
         "table": "kb_chunk",
         # 说明当前用的是哪套实现：装了 llama-index 就是它，否则是内置兜底
         "engine": pipeline.engine_name(),
+    }
+    result.update(_vector_quality(tenant_code))
+    return result
+
+
+def _vector_quality(tenant_code: str | None = None) -> dict:
+    """体检：库里那批切片到底是用什么向量建出来的。
+
+    这是"知识库明明有数据，机器人却答不上来"最该先看的一项：
+    向量化失败（密钥没配 / 401）会静默写成 local-hash 兜底向量，
+    这种向量没有语义，检索只能按字面匹配。而向量是**索引那一刻**算的，
+    所以密钥修好之后必须重新索引，光重启没用。
+    """
+    from ..config import get_settings
+
+    settings = get_settings()
+    fallback = ["local-hash"]
+    try:
+        with store.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT COALESCE(embedding_model, 'null') AS model, COUNT(1) AS chunks
+                  FROM kb_chunk
+                 WHERE (%s IS NULL OR tenant_code = %s)
+                 GROUP BY COALESCE(embedding_model, 'null')
+                 ORDER BY chunks DESC
+                """, (tenant_code, tenant_code)
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        return {"chunkVectorModels": [], "vectorQualityHint": f"读取切片向量来源失败：{exc}"}
+    models = [{"model": row["model"], "chunks": int(row["chunks"])} for row in rows]
+    degraded = [item for item in models if item["model"] in fallback]
+    # 具体是哪些文档用了兜底向量：客户服务侧据此只重建这几份，不用整库重跑
+    fallback_docs: list[str] = []
+    if degraded:
+        try:
+            with store.connect() as conn:
+                fallback_docs = [
+                    str(row["doc_id"])
+                    for row in conn.execute(
+                        """
+                        SELECT DISTINCT doc_id
+                          FROM kb_chunk
+                         WHERE embedding_model = 'local-hash'
+                           AND (%s IS NULL OR tenant_code = %s)
+                         ORDER BY doc_id
+                        """, (tenant_code, tenant_code)
+                    ).fetchall()
+                ]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("统计兜底向量文档失败：%s", exc)
+    if degraded:
+        hint = (f"有 {sum(item['chunks'] for item in degraded)} 个切片用的是本地兜底向量"
+                "（没有语义，检索会退化成关键词匹配）。"
+                "修好向量密钥（YUNTI_AI_QWEN_API_KEY 或 YUNTI_AI_EMBEDDING_API_KEY）后，"
+                "到「知识库」把这些文档重新索引一遍。")
+    elif models:
+        hint = "切片都是真实向量，语义检索可用"
+    else:
+        hint = "知识库里还没有切片，先上传文档"
+    return {
+        "chunkVectorModels": models,
+        "fallbackDocIds": fallback_docs,
+        "embeddingKeyConfigured": bool(settings.embedding_key()),
+        "embeddingModel": settings.embedding_model,
+        "vectorQualityHint": hint,
     }
 
 

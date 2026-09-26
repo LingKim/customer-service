@@ -12,6 +12,8 @@ export interface SessionItem {
   source?: string | null
   intent?: string | null
   emotion?: string | null
+  /** 机器人转人工的原因（客户情绪激动 / 答不上来 / 命中转人工意图等） */
+  botTransferReason?: string | null
   startTime?: string
   endTime?: string
   lastContent?: string | null
@@ -50,6 +52,8 @@ export interface OpenSessionResult {
   visitorToken: string
   /** 访客身份令牌：本地保存，下次打开时回传，服务端据此认出"还是这个客户" */
   visitorIdentityToken: string
+  /** 机器人显示名（租户配置）：消息标签用它，不写死"机器人" */
+  botName?: string | null
   tokenExpireAt: string
   sessionStatus: number
   created: boolean

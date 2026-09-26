@@ -13,6 +13,7 @@
                s.agent_id      AS agent_id,
                s.intent        AS intent,
                s.emotion       AS emotion,
+               s.bot_transfer_reason AS bot_transfer_reason,
                s.source        AS source,
                s.start_time    AS start_time,
                s.end_time      AS end_time,
@@ -65,7 +66,8 @@
     <!-- 同一渠道、同一客户未结束的会话，访客刷新页面时复用，不重复开会话 -->
     <select id="selectOpenSession" resultType="cn.net.susan.customer.entity.Session">
         SELECT id, tenant_code, session_no, channel_id, customer_id, status, skill_group_id,
-               agent_id, intent, emotion, source, start_time, end_time, csat_score, last_msg_seq,
+               agent_id, intent, emotion, bot_transfer_reason, source, start_time, end_time,
+               csat_score, last_msg_seq,
                create_time, update_time, creator, editor, is_deleted
           FROM session
          WHERE tenant_code = #{tenantCode}
@@ -114,12 +116,15 @@
     <!-- 排队会话：没人负责、还没结束，先来先服务（智能路由的扫描对象） -->
     <select id="selectQueuedSessions" resultType="cn.net.susan.customer.entity.Session">
         SELECT id, tenant_code, session_no, channel_id, customer_id, status, skill_group_id,
-               agent_id, intent, emotion, source, start_time, end_time, csat_score, last_msg_seq,
+               agent_id, intent, emotion, bot_transfer_reason, source, start_time, end_time,
+               csat_score, last_msg_seq,
                create_time, update_time, creator, editor, is_deleted
           FROM session
          WHERE tenant_code = #{tenantCode}
            AND agent_id IS NULL
-           AND status IN (1, 2)
+           <!-- 只捞"1-排队中"：状态 2 是"机器人接待中"，归 AI 客服大脑管，
+                如果这里也捞，会话会在 10 秒内被派给人工，机器人一句话都说不上 -->
+           AND status = 1
            AND is_deleted = FALSE
          ORDER BY start_time
          LIMIT #{limit}

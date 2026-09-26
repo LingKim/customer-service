@@ -84,7 +84,9 @@ def _build_embed_model():
     return OpenAIEmbedding(
         model=settings.embedding_model,
         api_base=settings.embedding_base_url,
-        api_key=settings.embedding_api_key or "not-configured",
+        # 同样要走 embedding_key()：专用密钥没配时复用千问的 key，
+        # 否则这里会拿着空密钥去请求，401 之后又静默降级成本地向量
+        api_key=settings.embedding_key() or "not-configured",
         dimensions=1024,
         embed_batch_size=10,
     )
@@ -265,4 +267,9 @@ def search(tenant_code: str, query: str, top_k: int = 5, doc_ids: list[int] | No
     if not results:
         results = store.keyword_search(tenant_code, query, top_k=top_k)
         mode = "keyword"
+    # 局部导入：pipeline 顶层也 import 了本模块，放顶层会形成循环导入
+    from . import pipeline as pipeline_module
+    pipeline_module.warn_if_degraded(mode, source, query)
+    logger.info("知识库检索（llama-index） tenant=%s query=%s 命中=%d 模式=%s 向量来源=%s",
+                tenant_code, query[:40], len(results), mode, source)
     return {"query": query, "results": results, "vector_source": source, "mode": mode}

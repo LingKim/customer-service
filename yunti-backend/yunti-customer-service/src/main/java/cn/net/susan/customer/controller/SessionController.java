@@ -95,6 +95,17 @@ public class SessionController {
     }
 
     /**
+     * 工作台顶部计数：我的接待 / 待接待（服务端按固定口径算，不受当前标签页影响）。
+     */
+    @GetMapping("/summary")
+    public ApiResponse<SessionService.WorkloadVO> summary(
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        LoginUser user = jwtTokenParser.requireLoginUser(authorization);
+        return ApiResponse.ok(sessionService.workload(user));
+    }
+
+    /**
      * 会话详情。
      */
     @GetMapping("/{sessionNo}")

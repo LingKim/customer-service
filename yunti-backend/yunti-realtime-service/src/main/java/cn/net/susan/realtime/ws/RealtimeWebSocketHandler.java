@@ -154,10 +154,16 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
     protected void handleTextMessage(WebSocketSession rawSession, TextMessage textMessage) {
         ConnectionRegistry.Client client = registry.get(rawSession.getId());
         if (client == null) {
+            // 连接刚好被清理掉：属于正常竞态，不打扰日志
+            log.debug("收到消息但连接已注销 socketId={}", rawSession.getId());
             return;
         }
         client.touch();
         if (!client.allow(properties.getMaxMessagesPerSecond())) {
+            // 限流是"客户端在刷消息"的信号，值得留一条：客户端的自动重发撞上限流时会看到这个
+            log.warn("长连接消息被限流 userId={} identity={} socketId={} 每秒上限={}",
+                    client.principal().id(), client.principal().identity(),
+                    rawSession.getId(), properties.getMaxMessagesPerSecond());
             send(client.socket(), RealtimeMessage.error(42900, "发送过于频繁，请稍后再试"));
             return;
         }
@@ -166,11 +172,15 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
         try {
             inbound = objectMapper.readValue(textMessage.getPayload(), RealtimeMessage.class);
         } catch (Exception e) {
+            // 解析失败以前只回一句错误给客户端，服务端没留痕；这类问题多半是协议对不上
+            log.warn("长连接消息格式不正确 socketId={} payload={} error={}",
+                    rawSession.getId(), preview(textMessage.getPayload()), e.getMessage());
             send(client.socket(), RealtimeMessage.error(40000, "消息格式不正确"));
             return;
         }
 
         String type = inbound.type() == null ? "" : inbound.type().trim().toUpperCase();
+        logInbound(client, type, inbound);
         try {
             switch (type) {
                 case "PING" -> send(client.socket(), new RealtimeMessage(
@@ -184,7 +194,11 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
                 case "RELEASE" -> handleRelease(client, inbound);
                 case "TRANSFER" -> handleTransfer(client, inbound);
                 case "CLOSE_SESSION" -> handleClose(client, inbound);
-                default -> send(client.socket(), RealtimeMessage.error(40000, "不支持的消息类型：" + type));
+                default -> {
+                    log.warn("收到不支持的长连接消息类型 type={} identity={} userId={}",
+                            type, client.principal().identity(), client.principal().id());
+                    send(client.socket(), RealtimeMessage.error(40000, "不支持的消息类型：" + type));
+                }
             }
         } catch (BizException e) {
             send(client.socket(), RealtimeMessage.error(e.getCode(), e.getMessage()));
@@ -192,6 +206,22 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
             log.error("处理长连接消息失败 type={} socketId={}", type, rawSession.getId(), e);
             send(client.socket(), RealtimeMessage.error(50000, "服务处理失败，请稍后重试"));
         }
+    }
+
+    private void logInbound(ConnectionRegistry.Client client, String type, RealtimeMessage inbound) {
+        if ("PING".equals(type)) {
+            log.debug("长连接心跳 userId={} identity={}", client.principal().id(), client.principal().identity());
+            return;
+        }
+        String sessionNo = client.principal().isVisitor()
+                ? client.principal().sessionNo() : inbound.sessionNo();
+        log.info("收到上行消息 type={} identity={} userId={} session={} clientMsgNo={} 长度={}",
+                type, client.principal().identity(), client.principal().id(), sessionNo,
+                inbound.clientMsgNo(), inbound.content() == null ? 0 : inbound.content().length());
+    }
+
+    private String preview(String content) {
+        return content == null ? "-" : "长度=" + content.length();
     }
 
     @Override
@@ -212,10 +242,18 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
                 notifySessionChanged(client.principal().tenantCode(), sessionNo, "VISITOR_OFFLINE", false);
             }
         } else {
-            broadcastAgents(client.principal().tenantCode());
-            // 关掉浏览器 / 断线：不能再给他分派新会话
-            markAgentConnection(client.principal().tenantCode(), client.principal().id(), false);
+            String tenantCode = client.principal().tenantCode();
+            long agentId = client.principal().id();
+            broadcastAgents(tenantCode);
+            if (!hasOtherAgentConnection(tenantCode, agentId)) {
+                markAgentConnection(tenantCode, agentId, false);
+            }
         }
+    }
+
+    private boolean hasOtherAgentConnection(String tenantCode, long agentId) {
+        return registry.agentClients(tenantCode).stream()
+                .anyMatch(other -> other.principal().id() == agentId);
     }
 
     /** 坐席上下线标记：失败只记一行日志，不影响长连接本身 */
@@ -302,6 +340,88 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
         }
         log.info("通知坐席自动接入 tenant={} agentId={} sessionNo={} 送达连接数={}",
                 tenantCode, agentId, sessionNo, delivered);
+        return delivered;
+    }
+
+    /**
+     * 会话被（自动路由 / 机器人转人工）接走之后，把状态同步给**会话里的所有人**，客户也包含在内。
+     *
+     * <p>为什么需要它：坐席在工作台手点「接入会话」走的是长连接 CLAIM，那条路会广播 SESSION 帧；
+     * 而自动派单发生在 customer-service 里，长连接完全不知道，以前只给坐席发了一条 ASSIGNED。
+     * 结果客户那边永远停在"正在为您转接人工客服，请稍候"，既不知道有人接了，
+     * 头上的状态也一直显示"等待客服接入"。</p>
+     *
+     * @return 本次广播覆盖的连接数
+     */
+    public int notifyClaimed(String tenantCode, String sessionNo, Long agentId) {
+        if (tenantCode == null || tenantCode.isBlank() || sessionNo == null || sessionNo.isBlank()) {
+            return 0;
+        }
+        try {
+            SessionApiClient.SessionInfo session = sessionApi.requireSession(tenantCode, sessionNo);
+            // ① 会话状态（含 agentId）推给客户与租户内在线坐席 —— 客户头上的"等待接入"跟着变
+            broadcastSession(tenantCode, sessionNo, session);
+            // ② "人工客服已接入，很高兴为您服务"那条系统提示也要立刻出现在客户的对话里
+            broadcastLatestMessage(tenantCode, sessionNo);
+            // ③ 租户内其它坐席刷新列表（这条已经不待接待了）
+            notifySessionChanged(tenantCode, sessionNo, "SESSION_CLAIMED", null);
+            log.info("同步会话已接入状态 tenant={} sessionNo={} agentId={}",
+                    tenantCode, sessionNo, session.agentId() != null ? session.agentId() : agentId);
+            return registry.subscribersOf(sessionNo).size();
+        } catch (Exception e) {
+            log.warn("同步会话已接入状态失败 tenant={} sessionNo={} error={}",
+                    tenantCode, sessionNo, e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * 广播"某某正在输入"。
+     *
+     * <p>客户发完消息到机器人答上来之间有几秒（检索 + 模型），中间界面完全没反应，
+     * 客户会以为消息没发出去。这条轻量帧就是补这个空档：前端收到点亮"正在输入…"，
+     * 收到真正的消息（或 typing=false）再熄灭。</p>
+     *
+     * @param who 谁在输入：BOT-机器人、AGENT-坐席
+     * @return 实际送达的连接数
+     */
+    public int notifyTyping(String tenantCode, String sessionNo, String who, boolean typing) {
+        if (sessionNo == null || sessionNo.isBlank()) {
+            return 0;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("sessionNo", sessionNo);
+        payload.put("who", who == null || who.isBlank() ? "BOT" : who);
+        payload.put("typing", typing);
+        int delivered = broadcast(sessionNo,
+                RealtimeMessage.withData("TYPING", sessionNo, payload), null, false);
+        log.debug("广播输入状态 tenant={} sessionNo={} who={} typing={} 送达连接数={}",
+                tenantCode, sessionNo, payload.get("who"), typing, delivered);
+        return delivered;
+    }
+
+    /**
+     * 广播一条"不是从长连接发出来"的消息（机器人回复就是这样产生的）。
+     *
+     * <p>机器人回复在 customer-service 侧生成并落库，长连接完全不知道；
+     * 不反向推一次的话，访客要等到自己刷新页面才看得到机器人的回话——
+     * 而"机器人秒回"正是这一篇要的效果。</p>
+     *
+     * @param refreshAgents 是否顺带提醒坐席刷新列表（会话列表要显示最新一条消息与意图/情绪）
+     * @return 实际送达的连接数
+     */
+    public int notifyMessage(String tenantCode, String sessionNo, Map<String, Object> message,
+                             boolean refreshAgents) {
+        if (sessionNo == null || sessionNo.isBlank() || message == null || message.isEmpty()) {
+            return 0;
+        }
+        int delivered = broadcast(sessionNo,
+                RealtimeMessage.withData("MESSAGE", sessionNo, message), null, false);
+        if (refreshAgents) {
+            notifySessionChanged(tenantCode, sessionNo, "BOT_MESSAGE", null);
+        }
+        log.info("广播机器人/系统消息 tenant={} sessionNo={} 送达连接数={} msgNo={}",
+                tenantCode, sessionNo, delivered, message.get("msgNo"));
         return delivered;
     }
 
@@ -455,11 +575,16 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
 
         send(client.socket(), new RealtimeMessage("ACK", sessionNo, inbound.clientMsgNo(), null, null, null,
                 null, null, saved, System.currentTimeMillis(), null, null));
-        broadcast(sessionNo,
+        int delivered = broadcast(sessionNo,
                 new RealtimeMessage("MESSAGE", sessionNo, null, null, null, null, null, null,
                         saved, System.currentTimeMillis(), null, null),
                 client.socket().getId(),
                 visibleTo == VISIBLE_AGENT_ONLY);
+        // 一条消息走完"落库 → 回执 → 广播"三个动作，结果写一行：
+        // 送达连接数为 0 就说明对端没在线（客户发了、但坐席那边没连上），这是常见的一种"没收到"
+        log.info("消息已落库并广播 session={} msgNo={} seq={} senderType={} 内部备注={} 送达连接数={} clientMsgNo={}",
+                sessionNo, saved.msgNo(), saved.seq(), senderType,
+                visibleTo == VISIBLE_AGENT_ONLY, delivered, saved.clientMsgNo());
 
         // 访客说话：提醒租户内所有坐席刷新列表（最后一条消息、排队会话都会变）
         if (principal.isVisitor()) {
@@ -660,7 +785,9 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    private void broadcast(String sessionNo, RealtimeMessage message, String excludeSocketId, boolean agentOnly) {
+    /** @return 实际送达的连接数（调用方大多不关心，机器人回复的推送会记进日志） */
+    private int broadcast(String sessionNo, RealtimeMessage message, String excludeSocketId, boolean agentOnly) {
+        int delivered = 0;
         for (String socketId : registry.subscribersOf(sessionNo)) {
             if (socketId.equals(excludeSocketId)) {
                 continue;
@@ -673,7 +800,9 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
                 continue;
             }
             send(client.socket(), message);
+            delivered++;
         }
+        return delivered;
     }
 
     private void send(WebSocketSession socket, RealtimeMessage message) {

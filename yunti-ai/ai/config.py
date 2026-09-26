@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-v3"
     embedding_timeout: int = 30
 
+    # 知识问答的"召回够不够"阈值（量纲不同，分开配）：
+    #   vector  → 余弦相似度。经验值：中文短问句和正确切片一般在 0.4~0.7，
+    #             原来定 0.5 会把"确实相关但问句很短"的情况判成不够用，
+    #             于是机器人明明查得到也说"资料不足"，所以降到 0.35；
+    #   keyword → 命中片段占比（命中词数 / 查询片段数），基数小，0.12 起步。
+    rag_vector_min_score: float = 0.35
+    rag_keyword_min_score: float = 0.12
+
     def embedding_key(self) -> str:
         """向量化用哪个密钥。
 

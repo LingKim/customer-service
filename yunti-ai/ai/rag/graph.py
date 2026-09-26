@@ -21,6 +21,7 @@ import logging
 import re
 from typing import Any, TypedDict
 
+from ..config import get_settings
 from . import retriever
 from .store import query_terms
 
@@ -29,8 +30,13 @@ logger = logging.getLogger(__name__)
 # 召回质量阈值：两种检索口径的分数不在一个量纲上，要分开设
 #   vector  → 余弦相似度，0.5 以上算"确实相关"
 #   keyword → 命中片段占比，0.15 以上算"沾边"
-VECTOR_MIN_SCORE = 0.5
-KEYWORD_MIN_SCORE = 0.15
+VECTOR_MIN_SCORE = 0.35
+KEYWORD_MIN_SCORE = 0.12
+
+
+def thresholds() -> tuple[float, float]:
+    settings = get_settings()
+    return settings.rag_vector_min_score, settings.rag_keyword_min_score
 
 # 最多改写重检几次（防死循环）
 MAX_REWRITE_ROUNDS = 1
@@ -88,9 +94,15 @@ def node_grade(state: RagState) -> dict:
     """判断召回够不够：有没有结果 + 最高分有没有过阈值。"""
     hits = state.get("hits") or []
     keyword_mode = "keyword" in (state.get("mode") or "")
-    threshold = KEYWORD_MIN_SCORE if keyword_mode else VECTOR_MIN_SCORE
+    vector_min, keyword_min = thresholds()
+    threshold = keyword_min if keyword_mode else vector_min
     top = max((float(hit.get("score") or 0) for hit in hits), default=0.0)
     enough = bool(hits) and top >= threshold
+    # 这一行是"为什么答不上来"的第一现场：命中几条、走的是向量还是关键词、
+    # 最高分多少、阈值多少、判定够不够——一眼能看出是"没检索到"还是"检索到了但被判不够"
+    logger.info("召回判分 query=%s 命中=%d 模式=%s 最高分=%.4f 阈值=%.4f 判定=%s",
+                (state.get("query") or "")[:40], len(hits), state.get("mode"),
+                top, threshold, "够用" if enough else "不够")
     return {
         "enough": enough,
         "steps": _step(state, "grade",
