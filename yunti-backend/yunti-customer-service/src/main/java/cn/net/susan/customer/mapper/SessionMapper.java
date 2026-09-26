@@ -70,4 +70,25 @@ public interface SessionMapper extends BaseMapper<Session> {
      * 还有排队会话的租户列表（定时任务用）。
      */
     List<String> selectTenantsWithQueue();
+
+    /**
+     * 已结束、但还没有质检任务的会话（质检中心"发起全量质检"扫的就是这批）。
+     */
+    List<Session> selectClosedSessionsWithoutTask(
+            @Param("tenantCode") String tenantCode,
+            @Param("limit") int limit
+    );
+
+    /**
+     * "客户在等、坐席还没回"的会话：最后一条有效消息是客户发的，且已经等了足够久。
+     *
+     * <p>响应超时提醒的扫描对象。返回 Map 是因为要同时带出那条消息的 ID / 序号 / 内容 ——
+     * 提醒要指到具体哪句话没被回，而且靠 (消息, 规则) 唯一索引避免重复提醒。</p>
+     *
+     * @param oldest 只看比这个时间更早的消息（now - 最小超时阈值），把明显还没到点的先筛掉
+     */
+    List<Map<String, Object>> selectUnansweredSessions(
+            @Param("oldest") java.time.LocalDateTime oldest,
+            @Param("limit") int limit
+    );
 }

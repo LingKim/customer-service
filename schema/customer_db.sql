@@ -104,12 +104,16 @@ CREATE TABLE IF NOT EXISTS "qa_rule" (
   "rule_content" TEXT,
   "weight" INT NOT NULL DEFAULT 1,
   "is_enabled" BOOLEAN NOT NULL DEFAULT TRUE,
+  "is_realtime" BOOLEAN NOT NULL DEFAULT TRUE,
+  "hit_keywords" VARCHAR(512) DEFAULT NULL,
+  "severity" SMALLINT NOT NULL DEFAULT 2,
+  "timeout_seconds" INTEGER NOT NULL DEFAULT 60,
   "create_time" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "update_time" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "creator" VARCHAR(64) DEFAULT NULL,
   "editor" VARCHAR(64) DEFAULT NULL,
   "is_deleted" BOOLEAN NOT NULL DEFAULT FALSE,
-  CONSTRAINT ck_qa_rule_rule_type CHECK ("rule_type" IN (1,2,3,4)),
+  CONSTRAINT ck_qa_rule_rule_type CHECK ("rule_type" IN (1,2,3,4,5)),
   PRIMARY KEY ("id")
 );
 CREATE INDEX IF NOT EXISTS "idx_qa_rule_tenant_type" ON "qa_rule" ("tenant_code", "rule_type");
@@ -146,6 +150,58 @@ CREATE TABLE IF NOT EXISTS "qa_task" (
 );
 CREATE INDEX IF NOT EXISTS "idx_qa_task_tenant_status" ON "qa_task" ("tenant_code", "status");
 CREATE INDEX IF NOT EXISTS "idx_qa_task_tenant_session" ON "qa_task" ("tenant_code", "session_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_qa_task_tenant_session" ON "qa_task" ("tenant_code", "session_id")
+  WHERE "is_deleted" = FALSE AND "session_id" IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS "qa_alert" (
+  "id" BIGINT NOT NULL,
+  "tenant_code" VARCHAR(16) NOT NULL,
+  "session_id" BIGINT NOT NULL,
+  "session_no" VARCHAR(40) NOT NULL,
+  "agent_id" BIGINT DEFAULT NULL,
+  "message_id" BIGINT DEFAULT NULL,
+  "message_seq" BIGINT DEFAULT NULL,
+  "rule_id" BIGINT DEFAULT NULL,
+  "rule_name" VARCHAR(64) NOT NULL,
+  "rule_type" SMALLINT NOT NULL,
+  "severity" SMALLINT NOT NULL DEFAULT 2,
+  "hit_keyword" VARCHAR(128) DEFAULT NULL,
+  "snippet" VARCHAR(512) DEFAULT NULL,
+  "advice" VARCHAR(512) DEFAULT NULL,
+  "status" SMALLINT NOT NULL DEFAULT 1,
+  "handler_id" BIGINT DEFAULT NULL,
+  "handle_remark" VARCHAR(512) DEFAULT NULL,
+  "handle_time" TIMESTAMP DEFAULT NULL,
+  "create_time" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "update_time" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "creator" VARCHAR(64) DEFAULT NULL,
+  "editor" VARCHAR(64) DEFAULT NULL,
+  "is_deleted" BOOLEAN NOT NULL DEFAULT FALSE,
+  CONSTRAINT ck_qa_alert_severity CHECK ("severity" IN (1,2,3)),
+  CONSTRAINT ck_qa_alert_status CHECK ("status" IN (1,2)),
+  PRIMARY KEY ("id")
+);
+
+COMMENT ON TABLE "qa_alert" IS '会话实时质检告警';
+COMMENT ON COLUMN "qa_alert"."session_no" IS '会话号（坐席点告警直接跳到这条会话）';
+COMMENT ON COLUMN "qa_alert"."agent_id" IS '告警发生时该会话的负责坐席';
+COMMENT ON COLUMN "qa_alert"."message_id" IS '触发告警的消息 ID';
+COMMENT ON COLUMN "qa_alert"."rule_name" IS '命中的规则名';
+COMMENT ON COLUMN "qa_alert"."hit_keyword" IS '命中的词（敏感词类规则才有）';
+COMMENT ON COLUMN "qa_alert"."snippet" IS '命中片段（截取消息上下文，便于坐席定位）';
+COMMENT ON COLUMN "qa_alert"."advice" IS '处置建议';
+COMMENT ON COLUMN "qa_alert"."status" IS '状态码：1-待处理、2-已处理';
+
+CREATE INDEX IF NOT EXISTS "idx_qa_alert_tenant_session"
+    ON "qa_alert" ("tenant_code", "session_no", "create_time");
+
+CREATE INDEX IF NOT EXISTS "idx_qa_alert_tenant_status"
+    ON "qa_alert" ("tenant_code", "status", "create_time");
+
+-- 同一条消息 + 同一条规则只告警一次：消息幂等重发时不会重复弹窗
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_qa_alert_message_rule"
+    ON "qa_alert" ("tenant_code", "message_id", "rule_id")
+    WHERE "is_deleted" = FALSE AND "message_id" IS NOT NULL AND "rule_id" IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS "qa_review" (
   "id" BIGINT NOT NULL,
@@ -206,6 +262,8 @@ CREATE INDEX IF NOT EXISTS "idx_session_tenant_status_time" ON "session" ("tenan
 CREATE INDEX IF NOT EXISTS "idx_session_tenant_customer" ON "session" ("tenant_code", "customer_id");
 CREATE INDEX IF NOT EXISTS "idx_session_queue" ON "session" ("tenant_code", "start_time")
   WHERE "agent_id" IS NULL AND "is_deleted" = FALSE;
+CREATE INDEX IF NOT EXISTS "idx_session_tenant_end_time" ON "session" ("tenant_code", "end_time" DESC)
+  WHERE "status" = 4 AND "is_deleted" = FALSE;
 
 CREATE TABLE IF NOT EXISTS "session_message" (
   "id" BIGINT NOT NULL,

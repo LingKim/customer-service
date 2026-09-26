@@ -4,6 +4,7 @@ import cn.net.susan.common.api.ApiResponse;
 import cn.net.susan.common.auth.LoginUser;
 import cn.net.susan.customer.security.JwtTokenParser;
 import cn.net.susan.customer.service.QaService;
+import cn.net.susan.customer.service.RealtimeQaService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -30,11 +31,59 @@ import java.util.List;
 public class QaController {
 
     private final QaService qaService;
+    private final RealtimeQaService realtimeQaService;
     private final JwtTokenParser jwtTokenParser;
 
-    public QaController(QaService qaService, JwtTokenParser jwtTokenParser) {
+    public QaController(QaService qaService,
+                        RealtimeQaService realtimeQaService,
+                        JwtTokenParser jwtTokenParser) {
         this.qaService = qaService;
+        this.realtimeQaService = realtimeQaService;
         this.jwtTokenParser = jwtTokenParser;
+    }
+
+    /**
+     * 实时质检告警列表：质检中心「实时预警」用。
+     */
+    @GetMapping("/alerts")
+    public ApiResponse<List<RealtimeQaService.AlertVO>> alerts(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestParam(required = false) Integer status,
+            @RequestParam(required = false) Integer severity,
+            @RequestParam(required = false) Integer ruleType,
+            @RequestParam(required = false) String sessionNo,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String startTime,
+            @RequestParam(required = false) String endTime
+    ) {
+        LoginUser user = jwtTokenParser.requireLoginUser(authorization);
+        return ApiResponse.ok(realtimeQaService.alerts(user, new RealtimeQaService.AlertQuery(
+                status, severity, ruleType, sessionNo, keyword, startTime, endTime), authorization));
+    }
+
+    /**
+     * 某个会话的告警：坐席工作台切到这条会话时拉一次，之前错过的预警也不会漏。
+     */
+    @GetMapping("/alerts/session/{sessionNo}")
+    public ApiResponse<List<RealtimeQaService.AlertVO>> sessionAlerts(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String sessionNo
+    ) {
+        LoginUser user = jwtTokenParser.requireLoginUser(authorization);
+        return ApiResponse.ok(realtimeQaService.alertsOfSession(user, sessionNo, authorization));
+    }
+
+    /**
+     * 标记告警已处理（坐席当场处置完点一下）。
+     */
+    @PostMapping("/alerts/{id}/handle")
+    public ApiResponse<RealtimeQaService.AlertVO> handleAlert(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String id,
+            @RequestBody(required = false) HandleAlertBody body
+    ) {
+        LoginUser user = jwtTokenParser.requireLoginUser(authorization);
+        return ApiResponse.ok(realtimeQaService.handle(user, id, body == null ? null : body.remark(), authorization));
     }
 
     @GetMapping("/overview")
@@ -146,7 +195,11 @@ public class QaController {
                 body.ruleType(),
                 body.ruleContent(),
                 body.weight(),
-                body.enabled()
+                body.enabled(),
+                body.realtime() == null || body.realtime(),
+                body.hitKeywords(),
+                body.severity(),
+                body.timeoutSeconds()
         ));
     }
 
@@ -170,7 +223,7 @@ public class QaController {
 
             @NotNull(message = "请选择规则类型")
             @Min(1)
-            @Max(4)
+            @Max(5)
             Integer ruleType,
 
             @Size(max = 500, message = "规则内容最长 500 个字符")
@@ -180,7 +233,22 @@ public class QaController {
             @Max(value = 100, message = "权重不能大于 100")
             int weight,
 
-            boolean enabled
+            boolean enabled,
+
+            /** 是否参与实时质检（不传按参与处理） */
+            Boolean realtime,
+
+            @Size(max = 512, message = "命中词最长 512 个字符")
+            String hitKeywords,
+
+            @Min(value = 1, message = "告警级别取值 1-3")
+            @Max(value = 3, message = "告警级别取值 1-3")
+            Integer severity,
+
+            /** 仅"5-响应超时"类规则使用：客户发完消息多久没回算超时 */
+            @Min(value = 10, message = "响应超时秒数至少 10 秒")
+            @Max(value = 3600, message = "响应超时秒数最多 3600 秒")
+            Integer timeoutSeconds
     ) {
     }
 
@@ -197,6 +265,10 @@ public class QaController {
             @Size(max = 512, message = "复核意见最长 512 个字符")
             String comment
     ) {
+    }
+
+    /** 处理告警请求体 */
+    public record HandleAlertBody(@Size(max = 512, message = "处理说明最长 512 个字符") String remark) {
     }
 
     public record BatchReviewBody(

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd"><mapper namespace="cn.net.susan.customer.mapper.QaAlertMapper">
+
+    <select id="selectAlerts" resultType="cn.net.susan.customer.entity.QaAlert">
+        SELECT id, tenant_code, session_id, session_no, agent_id, message_id, message_seq,
+               rule_id, rule_name, rule_type, severity, hit_keyword, snippet, advice,
+               status, handler_id, handle_remark, handle_time,
+               create_time, update_time, creator, editor, is_deleted
+          FROM qa_alert
+         WHERE tenant_code = #{tenantCode}
+           AND is_deleted = FALSE
+           <if test="status != null">
+           AND status = #{status}
+           </if>
+           <if test="severity != null">
+           AND severity = #{severity}
+           </if>
+           <if test="ruleType != null">
+           AND rule_type = #{ruleType}
+           </if>
+           <if test="sessionNo != null and sessionNo != ''">
+           AND session_no = #{sessionNo}
+           </if>
+           <if test="keyword != null and keyword != ''">
+           AND (session_no ILIKE '%' || #{keyword} || '%'
+                OR rule_name ILIKE '%' || #{keyword} || '%'
+                OR hit_keyword ILIKE '%' || #{keyword} || '%'
+                OR snippet ILIKE '%' || #{keyword} || '%')
+           </if>
+           <if test="startTime != null">
+           AND create_time &gt;= #{startTime}
+           </if>
+           <if test="endTime != null">
+           AND create_time &lt;= #{endTime}
+           </if>
+         ORDER BY create_time DESC
+         LIMIT #{limit}
+    </select>
+    <select id="selectAlertStat" resultType="java.util.Map">
+        SELECT COUNT(1)                                            AS total,
+               COUNT(1) FILTER (WHERE status = 1)                  AS pending,
+               COUNT(1) FILTER (WHERE severity = 3)                AS severe,
+               COUNT(1) FILTER (WHERE create_time >= CURRENT_DATE) AS today
+          FROM qa_alert
+         WHERE tenant_code = #{tenantCode}
+           AND is_deleted = FALSE
+    </select>
+    <!-- 落告警：同一条消息 + 同一条规则只留一条（消息重发不会重复弹窗） -->
+    <insert id="insertIgnore">
+        INSERT INTO qa_alert
+               (id, tenant_code, session_id, session_no, agent_id, message_id, message_seq,
+                rule_id, rule_name, rule_type, severity, hit_keyword, snippet, advice,
+                status, create_time, update_time, creator, editor, is_deleted)
+        VALUES (#{id}, #{tenantCode}, #{sessionId}, #{sessionNo}, #{agentId}, #{messageId}, #{messageSeq},
+                #{ruleId}, #{ruleName}, #{ruleType}, #{severity}, #{hitKeyword}, #{snippet}, #{advice},
+                1, COALESCE(#{createTime}, CURRENT_TIMESTAMP),
+                COALESCE(#{updateTime}, CURRENT_TIMESTAMP), #{creator}, #{editor}, FALSE)
+        ON CONFLICT (tenant_code, message_id, rule_id)
+            WHERE is_deleted = FALSE AND message_id IS NOT NULL AND rule_id IS NOT NULL
+            DO NOTHING
+    </insert></mapper>

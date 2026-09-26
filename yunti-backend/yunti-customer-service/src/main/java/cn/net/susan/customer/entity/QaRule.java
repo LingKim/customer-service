@@ -37,6 +37,18 @@ public class QaRule {
 
     private Boolean isEnabled;
 
+    /** 是否参与实时质检（关掉就只在会话结束后批量质检） */
+    private Boolean isRealtime;
+
+    /** 命中词表（逗号分隔）：敏感词类规则命中任意一个就告警 */
+    private String hitKeywords;
+
+    /** 告警级别：1-提示、2-警告、3-严重 */
+    private Integer severity;
+
+    /** 响应超时秒数（仅"5-响应超时"类规则使用） */
+    private Integer timeoutSeconds;
+
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;

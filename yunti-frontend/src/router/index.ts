@@ -84,6 +84,12 @@ const router = createRouter({
           meta: { title: '质检中心', requiresEnterprise: true },
         },
         {
+          path: 'modules/qa/alerts',
+          name: 'QaAlerts',
+          component: () => import('../views/qa/alerts.vue'),
+          meta: { title: '实时预警', requiresEnterprise: true },
+        },
+        {
           path: 'modules/workspace',
           name: 'Workspace',
           component: () => import('../views/workspace/index.vue'),

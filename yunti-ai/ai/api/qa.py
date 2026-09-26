@@ -3,20 +3,35 @@
 from __future__ import annotations
 
 import logging
+import hmac
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from .bot import require_bot_tenant
+from ..config import get_settings
 from ..core.trace import require_trace_id
 from ..services.qa import evaluate
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai/v1/qa", tags=["qa"])
+
+
+def require_qa_tenant(
+    authorization: str | None = Header(default=None),
+    x_tenant_code: str | None = Header(default=None, alias="X-Tenant-Code"),
+    x_internal_secret: str | None = Header(default=None, alias="X-Yunti-Internal-Secret"),
+) -> str:
+    configured = get_settings().internal_shared_secret
+    if configured and x_internal_secret and hmac.compare_digest(configured, x_internal_secret):
+        if not x_tenant_code or len(x_tenant_code) != 16 or x_tenant_code == "PLATFORM":
+            raise HTTPException(status_code=403, detail="缺少有效租户编码")
+        return x_tenant_code
+    return require_bot_tenant(authorization, x_tenant_code)
 
 
 class RuleSpec(BaseModel):
@@ -43,7 +58,7 @@ class EvaluateRequest(BaseModel):
 @router.post("/evaluate")
 async def evaluate_session(
     body: EvaluateRequest,
-    tenant_code: str = Depends(require_bot_tenant),
+    tenant_code: str = Depends(require_qa_tenant),
     trace_id: str = Depends(require_trace_id),
 ) -> dict:
     started = time.perf_counter()

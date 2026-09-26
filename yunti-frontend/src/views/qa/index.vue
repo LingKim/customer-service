@@ -8,13 +8,14 @@
       <el-button @click="refresh">刷新</el-button>
     </header>
 
-    <el-alert title="尚未接入会话消息链路。演示扫描仅生成样本；手工任务提供真实对话后可调用模型，结果来源会在列表显示。" type="warning" :closable="false" show-icon />
+    <el-alert title="质检任务来自真实会话；初检来源会在列表中显示。演示模式下的数据仅供界面预览。" type="info" :closable="false" show-icon />
 
     <div class="metrics">
       <el-card><strong>{{ overview?.total ?? 0 }}</strong><span>任务总数</span></el-card>
       <el-card><strong>{{ overview?.pending ?? 0 }}</strong><span>待复核</span></el-card>
       <el-card><strong>{{ overview?.passed ?? 0 }}</strong><span>已通过</span></el-card>
       <el-card><strong>{{ overview?.rejected ?? 0 }}</strong><span>已驳回</span></el-card>
+      <el-card><strong>{{ overview?.alertPending ?? 0 }}</strong><span>待处理预警</span></el-card>
     </div>
 
     <el-tabs v-model="tab">
@@ -31,7 +32,7 @@
           <el-button @click="openManual">新增单个质检</el-button>
           <el-button :disabled="!selected.length" :loading="busy" @click="batchAi">{{ isMock ? '模拟批量初检' : '模型批量初检' }}</el-button>
           <el-button :disabled="!selected.length" :loading="busy" @click="batchReview">批量通过</el-button>
-          <el-button type="primary" :loading="busy" @click="scan">生成演示任务</el-button>
+          <el-button type="primary" :loading="busy" @click="scan">{{ isMock ? '生成演示任务' : '扫描已结束会话' }}</el-button>
         </div>
         <el-table :data="tasks" v-loading="loading" row-key="taskNo" @selection-change="onSelection">
           <el-table-column type="selection" width="48" />
@@ -65,6 +66,12 @@
           <el-table-column prop="ruleTypeText" label="类型" width="110" />
           <el-table-column prop="ruleContent" label="检查内容" min-width="260" />
           <el-table-column prop="weight" label="权重" width="80" />
+          <el-table-column label="实时质检" width="90">
+            <template #default="{ row }">{{ row.realtime ? '参与' : '不参与' }}</template>
+          </el-table-column>
+          <el-table-column label="告警级别" width="90">
+            <template #default="{ row }">{{ row.severity === 3 ? '严重' : row.severity === 1 ? '提示' : '警告' }}</template>
+          </el-table-column>
           <el-table-column label="启用" width="80">
             <template #default="{ row }">{{ row.enabled ? '是' : '否' }}</template>
           </el-table-column>
@@ -104,6 +111,12 @@
           <el-descriptions-item label="初检来源">{{ sourceText(detail.aiSource) }}</el-descriptions-item>
         </el-descriptions>
         <p class="detail-comment">{{ detail.aiComment }}</p>
+        <el-alert v-if="detail.alertCount" :title="`会话期间有 ${detail.alertCount} 条实时预警，其中严重 ${detail.severeAlertCount ?? 0} 条`" type="warning" :closable="false" />
+        <el-table v-if="detail.alerts?.length" :data="detail.alerts" style="margin-top: 12px">
+          <el-table-column prop="ruleName" label="命中规则" />
+          <el-table-column prop="snippet" label="消息片段" />
+          <el-table-column label="状态" width="90"><template #default="{ row }">{{ row.status === 2 ? '已处理' : '待处理' }}</template></el-table-column>
+        </el-table>
         <el-table :data="detail.ruleResults">
           <el-table-column prop="name" label="规则" />
           <el-table-column prop="type" label="类型" width="100" />
@@ -125,10 +138,14 @@
     <el-dialog v-model="ruleVisible" :title="rule.id ? '编辑规则' : '新增规则'" width="500px">
       <el-form label-width="90px">
         <el-form-item label="名称"><el-input v-model="rule.ruleName" maxlength="64" /></el-form-item>
-        <el-form-item label="类型"><el-select v-model="rule.ruleType"><el-option label="敏感词" :value="1" /><el-option label="承诺规范" :value="2" /><el-option label="必答项" :value="3" /><el-option label="情绪识别" :value="4" /></el-select></el-form-item>
+        <el-form-item label="类型"><el-select v-model="rule.ruleType"><el-option label="敏感词" :value="1" /><el-option label="承诺规范" :value="2" /><el-option label="必答项" :value="3" /><el-option label="情绪识别" :value="4" /><el-option label="响应超时" :value="5" /></el-select></el-form-item>
         <el-form-item label="检查内容"><el-input v-model="rule.ruleContent" type="textarea" :rows="3" /></el-form-item>
         <el-form-item label="权重"><el-input-number v-model="rule.weight" :min="1" :max="100" /></el-form-item>
         <el-form-item label="启用"><el-switch v-model="rule.enabled" /></el-form-item>
+        <el-form-item label="实时质检"><el-switch v-model="rule.realtime" /></el-form-item>
+        <el-form-item v-if="rule.ruleType === 1" label="命中词"><el-input v-model="rule.hitKeywords" placeholder="逗号分隔" /></el-form-item>
+        <el-form-item label="告警级别"><el-select v-model="rule.severity"><el-option label="提示" :value="1" /><el-option label="警告" :value="2" /><el-option label="严重" :value="3" /></el-select></el-form-item>
+        <el-form-item v-if="rule.ruleType === 5" label="超时秒数"><el-input-number v-model="rule.timeoutSeconds" :min="10" :max="3600" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="ruleVisible = false">取消</el-button><el-button type="primary" :loading="busy" @click="saveRule">保存</el-button></template>
     </el-dialog>
@@ -164,7 +181,7 @@ const ruleVisible = ref(false)
 const reviewTaskNo = ref('')
 const manual = reactive({ sessionName: '', agentName: '', aiScore: 80, riskLevel: 1, comment: '', transcript: '' })
 const review = reactive({ action: 1, score: 80, comment: '' })
-const rule = reactive({ id: '', ruleName: '', ruleType: 1, ruleContent: '', weight: 25, enabled: true })
+const rule = reactive({ id: '', ruleName: '', ruleType: 1, ruleContent: '', weight: 25, enabled: true, realtime: true, hitKeywords: '', severity: 2, timeoutSeconds: 60 })
 
 onMounted(refresh)
 
@@ -195,6 +212,7 @@ function sourceText(source?: string): string {
   if (source === 'llm-deepseek') return 'DeepSeek 模型'
   if (source === 'fallback-rule') return '规则兜底'
   if (source === 'manual') return '手工评分'
+  if (source === 'pending') return '待初检'
   if (source === 'demo') return '演示数据'
   return '未标记'
 }
@@ -245,25 +263,25 @@ async function batchAi() {
   busy.value = true
   try {
     await batchAiQaTasks(selected.value.map((item) => item.taskNo))
-    ElMessage.success(isMock ? '模拟初检完成' : '模型初检完成')
+    ElMessage.success(isMock ? '模拟初检完成' : '初检完成，请查看列表中的结果来源')
     await Promise.all([loadTasks(), loadOverview()])
   } finally { busy.value = false }
 }
 
 async function scan() {
-  await ElMessageBox.confirm('将生成演示会话的质检任务，是否继续？', '演示扫描')
+  await ElMessageBox.confirm(isMock ? '将生成演示质检任务，是否继续？' : '将扫描已结束且尚未质检的会话，是否继续？', '全量质检')
   busy.value = true
   try {
     const result = await scanQaTasks()
-    ElMessage.success(`已生成 ${result.created} 条演示任务`)
+    ElMessage.success(isMock ? `已生成 ${result.created} 条演示任务` : `扫描 ${result.scanned ?? result.created} 条会话，生成 ${result.created} 条任务`)
     await Promise.all([loadTasks(), loadOverview()])
   } finally { busy.value = false }
 }
 
 function openRule(item?: QaRuleItem) {
   Object.assign(rule, item
-    ? { id: item.id, ruleName: item.ruleName, ruleType: item.ruleType, ruleContent: item.ruleContent || '', weight: item.weight, enabled: item.enabled }
-    : { id: '', ruleName: '', ruleType: 1, ruleContent: '', weight: 25, enabled: true })
+    ? { id: item.id, ruleName: item.ruleName, ruleType: item.ruleType, ruleContent: item.ruleContent || '', weight: item.weight, enabled: item.enabled, realtime: item.realtime, hitKeywords: item.hitKeywords || '', severity: item.severity, timeoutSeconds: item.timeoutSeconds }
+    : { id: '', ruleName: '', ruleType: 1, ruleContent: '', weight: 25, enabled: true, realtime: true, hitKeywords: '', severity: 2, timeoutSeconds: 60 })
   ruleVisible.value = true
 }
 

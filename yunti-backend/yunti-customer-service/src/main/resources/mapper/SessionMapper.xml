@@ -124,6 +124,54 @@
          ORDER BY start_time
          LIMIT #{limit}
     </select>
+    <!-- 客户在等、坐席还没回的会话：最后一条有效消息是客户发的，且已经等了一会儿 -->
+    <select id="selectUnansweredSessions" resultType="java.util.Map">
+        SELECT s.id            AS session_id,
+               s.tenant_code   AS tenant_code,
+               s.session_no    AS session_no,
+               s.agent_id      AS agent_id,
+               s.status        AS session_status,
+               m.id            AS message_id,
+               m.seq           AS message_seq,
+               m.content       AS content,
+               m.send_time     AS send_time
+          FROM session s
+          JOIN LATERAL (
+                SELECT id, seq, content, send_time, sender_type
+                  FROM session_message
+                 WHERE session_id = s.id
+                   AND is_deleted = FALSE
+                   AND visible_to = 1
+                   AND sender_type IN (1, 2)
+                 ORDER BY seq DESC, id DESC
+                 LIMIT 1
+               ) m ON TRUE
+         WHERE s.is_deleted = FALSE
+           AND s.status IN (1, 3)
+           AND m.sender_type = 1
+           AND m.send_time &lt;= #{oldest}
+         ORDER BY m.send_time
+         LIMIT #{limit}
+    </select>
+    <!-- 已结束、还没质检过的会话：质检中心扫的就是这批真实会话 -->
+    <select id="selectClosedSessionsWithoutTask" resultType="cn.net.susan.customer.entity.Session">
+        SELECT s.id, s.tenant_code, s.session_no, s.channel_id, s.customer_id, s.status,
+               s.skill_group_id, s.agent_id, s.intent, s.emotion, s.source, s.start_time,
+               s.end_time, s.csat_score, s.last_msg_seq,
+               s.create_time, s.update_time, s.creator, s.editor, s.is_deleted
+          FROM session s
+         WHERE s.tenant_code = #{tenantCode}
+           AND s.status = 4
+           AND s.is_deleted = FALSE
+           AND NOT EXISTS (
+                SELECT 1 FROM qa_task t
+                 WHERE t.tenant_code = s.tenant_code
+                   AND t.session_id = s.id
+                   AND t.is_deleted = FALSE
+               )
+         ORDER BY s.end_time DESC NULLS LAST, s.id DESC
+         LIMIT #{limit}
+    </select>
     <!-- 还有排队会话的租户（定时任务逐个租户调度） -->
     <select id="selectTenantsWithQueue" resultType="java.lang.String">
         SELECT DISTINCT tenant_code

@@ -23,6 +23,8 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
@@ -95,6 +97,10 @@ public class SessionService {
     private final SnowflakeIdGenerator idGenerator;
     /** 智能路由：延迟注入，避免和 SessionService 构造循环依赖 */
     private final ObjectProvider<RoutingService> routingProvider;
+    /** 实时质检：同样是延迟注入，消息链路不该被质检拖住 */
+    private final ObjectProvider<RealtimeQaService> realtimeQaProvider;
+    /** 质检中心：会话结束后按真实对话建质检任务 */
+    private final ObjectProvider<QaService> qaServiceProvider;
 
     public SessionService(
             SessionMapper sessionMapper,
@@ -105,7 +111,9 @@ public class SessionService {
             ChannelKeyMapper channelKeyMapper,
             VisitorTokenService visitorTokenService,
             SnowflakeIdGenerator idGenerator,
-            ObjectProvider<RoutingService> routingProvider
+            ObjectProvider<RoutingService> routingProvider,
+            ObjectProvider<RealtimeQaService> realtimeQaProvider,
+            ObjectProvider<QaService> qaServiceProvider
     ) {
         this.sessionMapper = sessionMapper;
         this.sessionMessageMapper = sessionMessageMapper;
@@ -116,6 +124,8 @@ public class SessionService {
         this.visitorTokenService = visitorTokenService;
         this.idGenerator = idGenerator;
         this.routingProvider = routingProvider;
+        this.realtimeQaProvider = realtimeQaProvider;
+        this.qaServiceProvider = qaServiceProvider;
     }
 
     /**
@@ -358,7 +368,42 @@ public class SessionService {
 
         LocalDateTime now = LocalDateTime.now();
         touchCustomer(tenantCode, session.getCustomerId(), now);
+        // 边聊边检：消息落库后立刻过一遍实时质检规则（放在事务提交后跑）
+        scheduleRealtimeQa(tenantCode, session, message);
         return toMessageVO(message);
+    }
+
+    /**
+     * 实时质检：挂在事务提交之后执行。
+     *
+     * <p>两个考虑：一是别让质检拖慢消息本身；二是坐席收到预警点进会话时，
+     * 触发告警的那条消息必须已经落库了。质检失败只记日志，绝不能反过来影响消息链路。</p>
+     */
+    private void scheduleRealtimeQa(String tenantCode, Session session, SessionMessage message) {
+        Runnable task = () -> {
+            RealtimeQaService qa = realtimeQaProvider.getIfAvailable();
+            if (qa == null) {
+                return;
+            }
+            try {
+                qa.check(tenantCode, session, message.getId(), message.getSeq(),
+                        message.getSenderType() == null ? SENDER_CUSTOMER : message.getSenderType(),
+                        message.getContent(), message.getVisibleTo());
+            } catch (Exception e) {
+                log.warn("会话实时质检失败 tenant={} sessionNo={} error={}",
+                        tenantCode, session.getSessionNo(), e.getMessage());
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    task.run();
+                }
+            });
+            return;
+        }
+        task.run();
     }
 
     /** 分配会话内的下一个消息序号（数据库自增，并发安全） */
@@ -531,8 +576,41 @@ public class SessionService {
         session.setEndTime(now);
         recordEvent(tenantCode, session.getId(), EVENT_CLOSE, operatorId, null, null, trimRemark(remark));
         appendSystemMessage(tenantCode, session, "本次会话已结束，感谢您的咨询");
+        // 会话一结束就进质检：按真实对话建一条待复核任务（事务提交后跑）
+        scheduleQaTask(tenantCode, session, operatorId);
         log.info("会话已结束 tenant={} sessionNo={} operator={}", tenantCode, sessionNo, operatorId);
         return session;
+    }
+
+    /**
+     * 会话结束 → 生成质检任务。
+     *
+     * <p>放在事务提交之后：任务里要读这条会话的完整对话，得等消息和"会话已结束"都落库；
+     * 生成失败只记日志——质检不该反过来影响结束会话这件事本身。</p>
+     */
+    private void scheduleQaTask(String tenantCode, Session session, Long operatorId) {
+        Runnable task = () -> {
+            QaService qa = qaServiceProvider.getIfAvailable();
+            if (qa == null) {
+                return;
+            }
+            try {
+                qa.createFromSession(tenantCode, session, operatorId);
+            } catch (Exception e) {
+                log.warn("生成质检任务失败 tenant={} sessionNo={} error={}",
+                        tenantCode, session.getSessionNo(), e.getMessage());
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    task.run();
+                }
+            });
+            return;
+        }
+        task.run();
     }
 
     /**

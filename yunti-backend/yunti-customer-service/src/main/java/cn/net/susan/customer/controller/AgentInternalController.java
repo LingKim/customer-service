@@ -3,6 +3,7 @@ package cn.net.susan.customer.controller;
 import cn.net.susan.common.api.ApiResponse;
 import cn.net.susan.common.exception.BizException;
 import cn.net.susan.customer.service.AgentStatusService;
+import cn.net.susan.customer.service.RealtimeQaService;
 import cn.net.susan.customer.service.RoutingService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -29,12 +30,15 @@ public class AgentInternalController {
 
     private final AgentStatusService agentStatusService;
     private final RoutingService routingService;
+    private final RealtimeQaService realtimeQaService;
     private final String sharedSecret;
 
     public AgentInternalController(AgentStatusService agentStatusService, RoutingService routingService,
+                                   RealtimeQaService realtimeQaService,
                                    @Value("${yunti.internal.shared-secret:}") String sharedSecret) {
         this.agentStatusService = agentStatusService;
         this.routingService = routingService;
+        this.realtimeQaService = realtimeQaService;
         this.sharedSecret = sharedSecret;
     }
 
@@ -72,6 +76,25 @@ public class AgentInternalController {
                         provided.getBytes(StandardCharsets.UTF_8))) {
             throw new BizException(40301, "内部接口未授权");
         }
+    }
+
+    @PostMapping("/qa-timeout/run")
+    public ApiResponse<RealtimeQaService.TimeoutScanResult> runTimeoutScan(
+            @RequestHeader(value = "X-Yunti-Internal-Secret", required = false) String internalSecret) {
+        requireInternalSecret(internalSecret);
+        return ApiResponse.ok(realtimeQaService.scanUnansweredSessions());
+    }
+
+    /**
+     * 手动触发一次"响应超时"扫描（排障用）。
+     *
+     * <p>想知道"为什么没提醒"就调它：返回本轮扫到多少条"客户在等"的会话、
+     * 实际新增多少条提醒。scanned 一直是 0 说明扫描条件没命中（比如坐席最后说过话、
+     * 或者会话不在接待/排队状态）；scanned 有值但 alerted 是 0，说明还没到超时阈值。</p>
+     */
+    @PostMapping("/qa-timeout/run")
+    public ApiResponse<RealtimeQaService.TimeoutScanResult> runTimeoutScan() {
+        return ApiResponse.ok(realtimeQaService.scanUnansweredSessions());
     }
 
     /** 上下线请求体 */

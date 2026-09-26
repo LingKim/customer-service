@@ -34,6 +34,7 @@ class Settings(BaseSettings):
         default="yunti-customer-service-jwt-secret-please-change-in-prod-0123456789",
         validation_alias="YUNTI_JWT_SECRET",
     )
+    internal_shared_secret: str = Field(default="", validation_alias="YUNTI_INTERNAL_SHARED_SECRET")
 
 @lru_cache
 def get_settings() -> Settings:

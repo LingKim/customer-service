@@ -3,13 +3,21 @@ package cn.net.susan.customer.service;
 import cn.net.susan.common.auth.LoginUser;
 import cn.net.susan.common.exception.BizException;
 import cn.net.susan.common.id.SnowflakeIdGenerator;
+import cn.net.susan.customer.entity.Customer;
+import cn.net.susan.customer.entity.QaAlert;
 import cn.net.susan.customer.entity.QaReview;
 import cn.net.susan.customer.entity.QaRule;
 import cn.net.susan.customer.entity.QaTask;
+import cn.net.susan.customer.entity.Session;
+import cn.net.susan.customer.entity.SessionMessage;
 import cn.net.susan.customer.internal.QaAiClient;
+import cn.net.susan.customer.mapper.CustomerMapper;
+import cn.net.susan.customer.mapper.QaAlertMapper;
 import cn.net.susan.customer.mapper.QaReviewMapper;
 import cn.net.susan.customer.mapper.QaRuleMapper;
 import cn.net.susan.customer.mapper.QaTaskMapper;
+import cn.net.susan.customer.mapper.SessionMapper;
+import cn.net.susan.customer.mapper.SessionMessageMapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
@@ -28,6 +36,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 质检中心：规则配置、任务列表、AI 全量扫描、人工复核。
@@ -39,6 +49,13 @@ public class QaService {
 
     private static final DateTimeFormatter TASK_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final int SCAN_LIMIT = 50;
+    private static final int MAX_ALERT_EVIDENCE = 50;
+    private static final ExecutorService AI_EVALUATOR = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "qa-ai-evaluate");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -48,11 +65,16 @@ public class QaService {
             new RuleSeed("服务承诺规范", 2, "承诺规范", "承诺必须包含明确时间与可兑现口径"),
             new RuleSeed("必答项完整", 3, "必答项", "订单号、地址、发票抬头等关键信息必须核实"),
             new RuleSeed("情绪安抚", 4, "情绪识别", "客户表达不满时应先致歉再安抚，禁止机械回复"),
+            new RuleSeed("响应超时", 5, "响应超时", "客户发出消息后长时间没有坐席回复，需要提醒并及时响应"),
     };
 
     private final QaRuleMapper qaRuleMapper;
     private final QaTaskMapper qaTaskMapper;
     private final QaReviewMapper qaReviewMapper;
+    private final QaAlertMapper qaAlertMapper;
+    private final SessionMapper sessionMapper;
+    private final SessionMessageMapper sessionMessageMapper;
+    private final CustomerMapper customerMapper;
     private final SnowflakeIdGenerator idGenerator;
     private final QaAiClient qaAiClient;
 
@@ -60,12 +82,20 @@ public class QaService {
             QaRuleMapper qaRuleMapper,
             QaTaskMapper qaTaskMapper,
             QaReviewMapper qaReviewMapper,
+            QaAlertMapper qaAlertMapper,
+            SessionMapper sessionMapper,
+            SessionMessageMapper sessionMessageMapper,
+            CustomerMapper customerMapper,
             SnowflakeIdGenerator idGenerator,
             QaAiClient qaAiClient
     ) {
         this.qaRuleMapper = qaRuleMapper;
         this.qaTaskMapper = qaTaskMapper;
         this.qaReviewMapper = qaReviewMapper;
+        this.qaAlertMapper = qaAlertMapper;
+        this.sessionMapper = sessionMapper;
+        this.sessionMessageMapper = sessionMessageMapper;
+        this.customerMapper = customerMapper;
         this.idGenerator = idGenerator;
         this.qaAiClient = qaAiClient;
     }
@@ -91,8 +121,20 @@ public class QaService {
         int riskMid = countRisk(tasks, 2);
         int riskHigh = countRisk(tasks, 3);
         double passRate = total == 0 ? 0 : round2(passed * 100.0 / total);
+        // 实时预警三个数：总告警、待处理、严重
+        Map<String, Object> alertRow = qaAlertMapper.selectAlertStat(tenant);
+        int alertTotal = longToInt(alertRow == null ? null : alertRow.get("total"));
+        int alertPending = longToInt(alertRow == null ? null : alertRow.get("pending"));
+        int alertSevere = longToInt(alertRow == null ? null : alertRow.get("severe"));
         return new OverviewVO(total, pending, passed, rejected, round2(avgAi), round2(avgReview),
-                passRate, riskLow, riskMid, riskHigh);
+                passRate, riskLow, riskMid, riskHigh, alertTotal, alertPending, alertSevere);
+    }
+
+    private int longToInt(Object value) {
+        if (value == null) {
+            return 0;
+        }
+        return value instanceof Number number ? number.intValue() : Integer.parseInt(String.valueOf(value));
     }
 
     /**
@@ -131,6 +173,23 @@ public class QaService {
                     fail ? "AI 标记命中：关注 " + rule.getRuleContent() : "未命中该规则风险项"
             ));
         }
+        List<QaAlert> taskAlerts = task.getSessionId() == null ? List.of()
+                : qaAlertMapper.selectList(Wrappers.<QaAlert>lambdaQuery()
+                    .eq(QaAlert::getTenantCode, tenant)
+                    .eq(QaAlert::getSessionId, task.getSessionId())
+                    .eq(QaAlert::getDeleted, false)
+                    .orderByDesc(QaAlert::getCreateTime));
+        List<Map<String, Object>> alertEvidence = taskAlerts.stream().map(alert -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", String.valueOf(alert.getId()));
+            item.put("sessionNo", alert.getSessionNo());
+            item.put("ruleName", alert.getRuleName());
+            item.put("severity", alert.getSeverity());
+            item.put("snippet", alert.getSnippet());
+            item.put("status", alert.getStatus());
+            item.put("createTime", alert.getCreateTime());
+            return item;
+        }).toList();
         return new TaskDetailVO(
                 String.valueOf(task.getId()),
                 task.getTaskNo(),
@@ -148,27 +207,100 @@ public class QaService {
                 ai.rules(),
                 results,
                 task.getReviewerId() == null ? null : String.valueOf(task.getReviewerId()),
-                task.getAiSource()
+                task.getAiSource(),
+                alertEvidence,
+                taskAlerts.size(),
+                (int) taskAlerts.stream().filter(alert -> alert.getSeverity() != null && alert.getSeverity() >= 3).count()
         );
     }
 
-    /**
-     * 显式生成演示会话任务。真实会话接入前，这些任务不可作为正式质检结论。
-     */
-    @Transactional
+    /** 补扫已结束且还未质检的真实会话。 */
     public ScanResult scan(LoginUser user) {
         String tenant = tenantOf(user);
         ensureRules(tenant, user.userId());
-        List<QaTask> created = new ArrayList<>();
-        SampleSpec[] pool = SAMPLE_POOL;
-        for (int i = 0; i < 3; i++) {
-            SampleSpec spec = pool[RANDOM.nextInt(pool.length)];
-            QaTask task = buildSampleTask(tenant, spec);
-            qaTaskMapper.insert(task);
-            created.add(task);
+        List<Session> candidates = sessionMapper.selectClosedSessionsWithoutTask(tenant, SCAN_LIMIT);
+        List<String> taskNos = new ArrayList<>();
+        for (Session session : candidates) {
+            String taskNo = createFromSession(tenant, session, user.userId());
+            if (taskNo != null) {
+                taskNos.add(taskNo);
+            }
         }
-        log.info("演示质检任务生成完成 tenant={}, created={}", tenant, created.size());
-        return new ScanResult(created.size(), created.stream().map(QaTask::getTaskNo).toList());
+        return new ScanResult(candidates.size(), taskNos.size(), taskNos);
+    }
+
+    /** 会话结束后建任务；模型初检在后台运行，失败时保留任务供人工复核。 */
+    public String createFromSession(String tenantCode, Session session, Long operatorId) {
+        if (session == null || session.getId() == null || !tenantCode.equals(session.getTenantCode())) {
+            return null;
+        }
+        if (qaTaskMapper.selectCount(Wrappers.<QaTask>lambdaQuery()
+                .eq(QaTask::getTenantCode, tenantCode)
+                .eq(QaTask::getSessionId, session.getId())
+                .eq(QaTask::getDeleted, false)) > 0) {
+            return null;
+        }
+        List<SessionMessage> messages = sessionMessageMapper.selectList(Wrappers.<SessionMessage>lambdaQuery()
+                .eq(SessionMessage::getTenantCode, tenantCode)
+                .eq(SessionMessage::getSessionId, session.getId())
+                .eq(SessionMessage::getDeleted, false)
+                .orderByAsc(SessionMessage::getSeq)
+                .last("LIMIT 100"));
+        String transcript = messages.stream()
+                .filter(message -> message.getContent() != null && !message.getContent().isBlank())
+                .map(message -> (Integer.valueOf(1).equals(message.getSenderType()) ? "客户" : "客服")
+                        + "：" + message.getContent())
+                .reduce((a, b) -> a + "\n" + b).orElse("");
+        if (transcript.isBlank()) {
+            return null;
+        }
+        if (transcript.length() > 19000) {
+            transcript = transcript.substring(0, 19000);
+        }
+        Customer customer = session.getCustomerId() == null ? null : customerMapper.selectById(session.getCustomerId());
+        String customerName = customer != null && tenantCode.equals(customer.getTenantCode())
+                && !Boolean.TRUE.equals(customer.getDeleted()) && customer.getName() != null
+                ? customer.getName() : "访客";
+        String sessionName = customerName + " · " + session.getSessionNo();
+        String agentName = session.getAgentId() == null ? "未接入坐席" : String.valueOf(session.getAgentId());
+        List<QaAlert> alertRows = qaAlertMapper.selectAlerts(
+                tenantCode, null, null, null, session.getSessionNo(), null, null, null, MAX_ALERT_EVIDENCE);
+        List<Map<String, Object>> alerts = alertRows.stream().map(alert -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("ruleName", alert.getRuleName());
+            item.put("severity", alert.getSeverity());
+            item.put("snippet", alert.getSnippet());
+            item.put("status", alert.getStatus());
+            return item;
+        }).toList();
+        Map<String, Object> ai = new LinkedHashMap<>();
+        ai.put("sessionName", sessionName);
+        ai.put("agentName", agentName);
+        ai.put("comment", "待初检");
+        ai.put("rules", List.of());
+        ai.put("alerts", alerts);
+        QaTask task = QaTask.builder()
+                .id(idGenerator.nextId()).tenantCode(tenantCode).taskNo(generateTaskNo(tenantCode))
+                .sessionId(session.getId()).agentId(session.getAgentId())
+                .aiResult(writeJson(ai)).transcript(transcript).aiSource("pending")
+                .riskLevel(1).status(1)
+                .creator(operatorId == null ? "SYSTEM" : String.valueOf(operatorId))
+                .deleted(false).build();
+        try {
+            qaTaskMapper.insert(task);
+        } catch (DuplicateKeyException e) {
+            return null;
+        }
+        AI_EVALUATOR.submit(() -> {
+            try {
+                QaTask current = requireTask(tenantCode, task.getTaskNo());
+                evaluateTask(tenantCode, current, null);
+            } catch (Exception e) {
+                log.warn("后台质检初检失败 tenant={} taskNo={} error={}",
+                        tenantCode, task.getTaskNo(), e.getMessage());
+            }
+        });
+        return task.getTaskNo();
     }
 
     /**
@@ -327,31 +459,64 @@ public class QaService {
         if (selected.stream().anyMatch(task -> task.getTranscript() == null || task.getTranscript().isBlank())) {
             throw new BizException(40001, "所选任务含无对话文本的演示任务，无法执行真实模型初检");
         }
+        for (QaTask task : selected) {
+            evaluateTask(tenant, task, authorization);
+            qaTaskMapper.update(null, Wrappers.<QaTask>lambdaUpdate()
+                    .eq(QaTask::getId, task.getId())
+                    .eq(QaTask::getTenantCode, tenant)
+                    .eq(QaTask::getDeleted, false)
+                    .set(QaTask::getStatus, 1)
+                    .set(QaTask::getReviewScore, null)
+                    .set(QaTask::getReviewerId, null)
+                    .set(QaTask::getReviewTime, null)
+                    .set(QaTask::getEditor, String.valueOf(user.userId()))
+                    .set(QaTask::getUpdateTime, LocalDateTime.now()));
+        }
+        return new BatchAiResult(taskNos.size(), List.copyOf(taskNos));
+    }
+
+    private void evaluateTask(String tenant, QaTask task, String authorization) {
+        if (task.getTranscript() == null || task.getTranscript().isBlank()) {
+            return;
+        }
+        AiResult old = parseAi(task);
         List<QaAiClient.Rule> specs = enabledRules(tenant).stream()
                 .map(rule -> new QaAiClient.Rule(rule.getRuleName(), rule.getRuleContent()))
                 .toList();
-        for (QaTask task : selected) {
-            AiResult old = parseAi(task);
-            QaAiClient.Evaluation evaluated = qaAiClient.evaluate(new QaAiClient.Request(
-                    tenant, old.sessionName(), old.agentName(), task.getTranscript(), specs), authorization);
-            Map<String, Object> ai = new LinkedHashMap<>();
-            ai.put("sessionName", old.sessionName());
-            ai.put("agentName", old.agentName());
-            ai.put("comment", evaluated.comment());
-            ai.put("rules", evaluated.rules());
-            task.setAiScore(BigDecimal.valueOf(evaluated.aiScore()).setScale(2, RoundingMode.HALF_UP));
-            task.setAiResult(writeJson(ai));
-            task.setAiSource(evaluated.source());
-            task.setRiskLevel(evaluated.riskLevel());
-            task.setStatus(1);
-            task.setReviewScore(null);
-            task.setReviewerId(null);
-            task.setReviewTime(null);
-            task.setEditor(String.valueOf(user.userId()));
-            task.setUpdateTime(LocalDateTime.now());
-            qaTaskMapper.updateById(task);
+        List<QaAlert> alerts = task.getSessionId() == null ? List.of()
+                : qaAlertMapper.selectList(Wrappers.<QaAlert>lambdaQuery()
+                    .eq(QaAlert::getTenantCode, tenant)
+                    .eq(QaAlert::getSessionId, task.getSessionId())
+                    .eq(QaAlert::getDeleted, false)
+                    .orderByAsc(QaAlert::getCreateTime));
+        StringBuilder evidence = new StringBuilder();
+        int riskFloor = 1;
+        for (QaAlert alert : alerts) {
+            evidence.append("实时预警：").append(alert.getRuleName())
+                    .append("；片段：").append(alert.getSnippet() == null ? "" : alert.getSnippet())
+                    .append('\n');
+            if (alert.getSeverity() != null) {
+                riskFloor = Math.max(riskFloor, alert.getSeverity());
+            }
         }
-        return new BatchAiResult(taskNos.size(), List.copyOf(taskNos));
+        String transcript = evidence + task.getTranscript();
+        if (transcript.length() > 20000) {
+            transcript = transcript.substring(0, 20000);
+        }
+        QaAiClient.Evaluation evaluated = qaAiClient.evaluate(new QaAiClient.Request(
+                tenant, old.sessionName(), old.agentName(), transcript, specs), authorization);
+        Map<String, Object> ai = new LinkedHashMap<>();
+        ai.put("sessionName", old.sessionName());
+        ai.put("agentName", old.agentName());
+        ai.put("comment", evaluated.comment());
+        ai.put("rules", evaluated.rules());
+        ai.put("alertCount", alerts.size());
+        task.setAiScore(BigDecimal.valueOf(evaluated.aiScore()).setScale(2, RoundingMode.HALF_UP));
+        task.setAiResult(writeJson(ai));
+        task.setAiSource(evaluated.source());
+        task.setRiskLevel(Math.max(evaluated.riskLevel(), riskFloor));
+        task.setUpdateTime(LocalDateTime.now());
+        qaTaskMapper.updateById(task);
     }
 
     /**
@@ -374,10 +539,18 @@ public class QaService {
      */
     @Transactional
     public RuleVO saveRule(LoginUser user, String id, String ruleName, int ruleType,
-                           String ruleContent, int weight, boolean enabled) {
+                           String ruleContent, int weight, boolean enabled,
+                           boolean realtime, String hitKeywords, Integer severity,
+                           Integer timeoutSeconds) {
         String tenant = tenantOf(user);
-        if (ruleType < 1 || ruleType > 4) {
+        if (ruleType < 1 || ruleType > 5) {
             throw new BizException(40001, "规则类型不正确");
+        }
+        if (severity != null && (severity < 1 || severity > 3)) {
+            throw new BizException(40001, "告警级别取值 1-提示、2-警告、3-严重");
+        }
+        if (timeoutSeconds != null && (timeoutSeconds < 10 || timeoutSeconds > 3600)) {
+            throw new BizException(40001, "响应超时秒数应在 10~3600 之间");
         }
         weight = Math.max(0, Math.min(100, weight));
         LocalDateTime now = LocalDateTime.now();
@@ -399,6 +572,10 @@ public class QaService {
                     .ruleContent(ruleContent)
                     .weight(weight)
                     .isEnabled(enabled)
+                    .isRealtime(realtime)
+                    .hitKeywords(hitKeywords)
+                    .severity(severity == null ? 2 : severity)
+                    .timeoutSeconds(timeoutSeconds == null ? 60 : timeoutSeconds)
                     .creator(String.valueOf(user.userId()))
                     .deleted(false)
                     .build();
@@ -419,6 +596,10 @@ public class QaService {
             rule.setRuleContent(ruleContent);
             rule.setWeight(weight);
             rule.setIsEnabled(enabled);
+            rule.setIsRealtime(realtime);
+            rule.setHitKeywords(hitKeywords);
+            rule.setSeverity(severity == null ? 2 : severity);
+            rule.setTimeoutSeconds(timeoutSeconds == null ? 60 : timeoutSeconds);
             rule.setEditor(String.valueOf(user.userId()));
             rule.setUpdateTime(now);
             qaRuleMapper.updateById(rule);
@@ -548,6 +729,10 @@ public class QaService {
                 rule.getRuleContent(),
                 rule.getWeight(),
                 Boolean.TRUE.equals(rule.getIsEnabled()),
+                !Boolean.FALSE.equals(rule.getIsRealtime()),
+                rule.getHitKeywords(),
+                rule.getSeverity() == null ? 2 : rule.getSeverity(),
+                rule.getTimeoutSeconds() == null ? 60 : rule.getTimeoutSeconds(),
                 rule.getUpdateTime() == null ? null : rule.getUpdateTime().toString().replace('T', ' ')
         );
     }
@@ -633,6 +818,7 @@ public class QaService {
             case 2 -> "承诺规范";
             case 3 -> "必答项";
             case 4 -> "情绪识别";
+            case 5 -> "响应超时";
             default -> "其他";
         };
     }
@@ -727,7 +913,10 @@ public class QaService {
             double passRate,
             int riskLow,
             int riskMid,
-            int riskHigh
+            int riskHigh,
+            int alertTotal,
+            int alertPending,
+            int alertSevere
     ) {
     }
 
@@ -742,6 +931,10 @@ public class QaService {
             String ruleContent,
             int weight,
             boolean enabled,
+            boolean realtime,
+            String hitKeywords,
+            int severity,
+            int timeoutSeconds,
             String updateTime
     ) {
     }
@@ -788,7 +981,10 @@ public class QaService {
             List<String> ruleNames,
             List<RuleResultVO> ruleResults,
             String reviewerId,
-            String aiSource
+            String aiSource,
+            List<Map<String, Object>> alerts,
+            int alertCount,
+            int severeAlertCount
     ) {
     }
 
@@ -801,7 +997,7 @@ public class QaService {
     /**
      * 全量扫描结果。
      */
-    public record ScanResult(int created, List<String> taskNos) {
+    public record ScanResult(int scanned, int created, List<String> taskNos) {
     }
 
     /**

@@ -33,7 +33,7 @@ class QaAiClientTest {
         });
         server.start();
         try {
-            QaAiClient client = new QaAiClient("http://127.0.0.1:" + server.getAddress().getPort());
+            QaAiClient client = new QaAiClient("http://127.0.0.1:" + server.getAddress().getPort(), "");
             QaAiClient.Evaluation result = client.evaluate(new QaAiClient.Request(
                     "T000000000000001", "会话", "客服", "客户咨询发票", List.of(
                     new QaAiClient.Rule("必答项完整", "需核实发票信息"))), "Bearer local-test-token");

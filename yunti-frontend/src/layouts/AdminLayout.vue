@@ -39,6 +39,9 @@
         <el-menu-item v-if="userStore.userType === 2" index="/modules/qa">
           <span>质检中心</span>
         </el-menu-item>
+        <el-menu-item v-if="userStore.userType === 2" index="/modules/qa/alerts">
+          <span>实时预警</span>
+        </el-menu-item>
         <el-menu-item v-if="userStore.userType === 2" index="/modules/workspace">
           <span>在线客服</span>
         </el-menu-item>

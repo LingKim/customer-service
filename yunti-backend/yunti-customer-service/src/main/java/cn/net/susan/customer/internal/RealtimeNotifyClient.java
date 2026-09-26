@@ -7,6 +7,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -26,6 +27,30 @@ public class RealtimeNotifyClient {
                                 @Value("${yunti.internal.shared-secret:}") String sharedSecret) {
         this.restClient = RestClient.builder().baseUrl(baseUrl)
                 .defaultHeader("X-Yunti-Internal-Secret", sharedSecret).build();
+    }
+
+    /**
+     * 通知实时网关：这条会话刚刚命中实时质检规则，把预警推给它的坐席。
+     *
+     * <p>和自动接入通知一样，失败只记日志——预警发不出去不能反过来影响客户消息。</p>
+     */
+    public void notifyQaAlert(String tenantCode, String sessionNo, Long agentId, Map<String, Object> payload) {
+        try {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("tenantCode", tenantCode);
+            body.put("sessionNo", sessionNo);
+            body.put("agentId", agentId);
+            body.put("payload", payload);
+            restClient.post()
+                    .uri("/api/realtime/internal/qa-alert")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (Exception e) {
+            log.warn("推送实时质检告警失败 tenant={} sessionNo={} error={}",
+                    tenantCode, sessionNo, e.getMessage());
+        }
     }
 
     /**

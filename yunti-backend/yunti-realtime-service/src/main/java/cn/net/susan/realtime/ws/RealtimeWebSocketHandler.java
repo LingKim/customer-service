@@ -21,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -225,6 +226,53 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
             log.warn("同步坐席上下线状态失败 tenant={} agentId={} connected={} error={}",
                     tenantCode, agentId, connected, e.getMessage());
         }
+    }
+
+    /**
+     * 推送会话实时质检预警（customer-service 判定命中后调用）。
+     *
+     * <p>只发给坐席连接：这是给客服看的提醒，客户不该看到"你这句话有问题"。
+     * 除了当前订阅这条会话的坐席，还会单独投递给该会话的负责坐席——他可能刚切到别的会话，
+     * 预警不能因为"没订阅"就丢掉。</p>
+     *
+     * @return 实际送达的连接数
+     */
+    public int notifyQaAlert(String tenantCode, String sessionNo, Long agentId, Map<String, Object> payload) {
+        if (tenantCode == null || tenantCode.isBlank() || sessionNo == null || sessionNo.isBlank()) {
+            return 0;
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("sessionNo", sessionNo);
+        if (payload != null) {
+            data.putAll(payload);
+        }
+        RealtimeMessage message = RealtimeMessage.withData("QA_ALERT", sessionNo, data);
+        Set<String> sent = new HashSet<>();
+        int delivered = 0;
+        for (String socketId : registry.subscribersOf(sessionNo)) {
+            ConnectionRegistry.Client client = registry.get(socketId);
+            if (client == null || client.principal().isVisitor()) {
+                continue;
+            }
+            if (!tenantCode.equals(client.principal().tenantCode())) {
+                continue;
+            }
+            send(client.socket(), message);
+            sent.add(socketId);
+            delivered++;
+        }
+        if (agentId != null) {
+            for (ConnectionRegistry.Client client : registry.agentClients(tenantCode)) {
+                if (client.principal().id() != agentId || sent.contains(client.socket().getId())) {
+                    continue;
+                }
+                send(client.socket(), message);
+                delivered++;
+            }
+        }
+        log.info("推送会话实时质检预警 tenant={} sessionNo={} agentId={} 送达连接数={}",
+                tenantCode, sessionNo, agentId, delivered);
+        return delivered;
     }
 
     /**

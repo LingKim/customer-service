@@ -1,6 +1,5 @@
 package cn.net.susan.customer.internal;
 
-import cn.net.susan.common.exception.BizException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,14 +27,18 @@ public class QaAiClient {
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5)).build();
     private final String baseUrl;
+    private final String internalSharedSecret;
 
-    public QaAiClient(@Value("${yunti.ai.qa-base-url:http://127.0.0.1:9100}") String baseUrl) {
+    public QaAiClient(@Value("${yunti.ai.qa-base-url:http://127.0.0.1:9100}") String baseUrl,
+                      @Value("${yunti.internal.shared-secret:}") String internalSharedSecret) {
         this.baseUrl = baseUrl.replaceAll("/+$", "");
+        this.internalSharedSecret = internalSharedSecret;
     }
 
     public Evaluation evaluate(Request request, String authorization) {
-        if (authorization == null || !authorization.startsWith("Bearer ")) {
-            throw new BizException(40101, "缺少登录令牌");
+        boolean hasBearer = authorization != null && authorization.startsWith("Bearer ");
+        if (!hasBearer && (internalSharedSecret == null || internalSharedSecret.isBlank())) {
+            return fallback(request);
         }
         String trace = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         Map<String, Object> body = new LinkedHashMap<>();
@@ -47,15 +50,19 @@ public class QaAiClient {
         body.put("rules", request.rules());
         long started = System.currentTimeMillis();
         try {
-            HttpRequest httpRequest = HttpRequest.newBuilder()
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + "/api/ai/v1/qa/evaluate"))
                     .timeout(Duration.ofSeconds(35))
                     .header("Content-Type", "application/json")
-                    .header("Authorization", authorization)
                     .header("X-Tenant-Code", request.tenantCode())
                     .header("X-Request-Id", trace)
-                    .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body), StandardCharsets.UTF_8))
-                    .build();
+                    .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body), StandardCharsets.UTF_8));
+            if (hasBearer) {
+                builder.header("Authorization", authorization);
+            } else {
+                builder.header("X-Yunti-Internal-Secret", internalSharedSecret);
+            }
+            HttpRequest httpRequest = builder.build();
             HttpResponse<String> response = client.send(httpRequest,
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() != 200) {

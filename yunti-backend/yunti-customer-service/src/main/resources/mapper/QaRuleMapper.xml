@@ -6,9 +6,12 @@
     <insert id="insertIgnore">
         INSERT INTO qa_rule
                (id, tenant_code, rule_name, rule_type, rule_content, weight, is_enabled,
+                is_realtime, hit_keywords, severity, timeout_seconds,
                 create_time, update_time, creator, editor, is_deleted)
         VALUES (#{id}, #{tenantCode}, #{ruleName}, #{ruleType}, #{ruleContent}, #{weight},
-                #{isEnabled}, COALESCE(#{createTime}, CURRENT_TIMESTAMP),
+                #{isEnabled}, COALESCE(#{isRealtime}, TRUE), #{hitKeywords}, COALESCE(#{severity}, 2),
+                COALESCE(#{timeoutSeconds}, 60),
+                COALESCE(#{createTime}, CURRENT_TIMESTAMP),
                 COALESCE(#{updateTime}, CURRENT_TIMESTAMP), #{creator}, #{editor}, FALSE)
         ON CONFLICT (tenant_code, rule_name) WHERE is_deleted = FALSE DO NOTHING
     </insert>

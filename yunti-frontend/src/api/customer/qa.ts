@@ -15,6 +15,35 @@ export interface QaOverview {
   riskLow: number
   riskMid: number
   riskHigh: number
+  /** 实时质检：告警总数 */
+  alertTotal: number
+  /** 实时质检：待处理告警 */
+  alertPending: number
+  /** 实时质检：严重告警 */
+  alertSevere: number
+}
+
+/** 会话实时质检告警（边聊边检命中一次就有一条） */
+export interface QaAlertItem {
+  id: string
+  sessionNo: string
+  agentId?: string | null
+  agentName?: string | null
+  ruleName: string
+  ruleType: number
+  ruleTypeText: string
+  severity: number
+  severityText: string
+  hitKeyword?: string | null
+  snippet?: string | null
+  advice?: string | null
+  status: number
+  statusText: string
+  handlerName?: string | null
+  handleRemark?: string | null
+  messageSeq?: number | null
+  createTime?: string | null
+  handleTime?: string | null
 }
 
 export interface QaTaskItem {
@@ -45,6 +74,10 @@ export interface RuleResult {
 export interface QaTaskDetail extends QaTaskItem {
   ruleResults: RuleResult[]
   reviewerId?: string
+  /** 会话期间的实时预警明细 */
+  alerts?: QaAlertItem[]
+  alertCount?: number
+  severeAlertCount?: number
 }
 
 export interface QaRuleItem {
@@ -55,10 +88,21 @@ export interface QaRuleItem {
   ruleContent?: string
   weight: number
   enabled: boolean
+  /** 是否参与实时质检（边聊边检） */
+  realtime: boolean
+  /** 命中词表（逗号分隔）：敏感词类规则命中任意一个就告警 */
+  hitKeywords?: string | null
+  /** 告警级别：1-提示、2-警告、3-严重 */
+  severity: number
+  /** 响应超时秒数（仅"响应超时"类规则使用） */
+  timeoutSeconds: number
   updateTime?: string
 }
 
 export interface QaScanResult {
+  /** 本次扫描到的"已结束且还没质检过"的会话数 */
+  scanned?: number
+  /** 实际生成的质检任务数 */
   created: number
   taskNos: string[]
 }
@@ -76,6 +120,7 @@ export function fetchQaOverview(): Promise<QaOverview> {
       riskLow: tasks.filter((task) => task.riskLevel === 1).length,
       riskMid: tasks.filter((task) => task.riskLevel === 2).length,
       riskHigh: tasks.filter((task) => task.riskLevel === 3).length,
+      alertTotal: 0, alertPending: 0, alertSevere: 0,
     })
   }
   return request<QaOverview>({ url: '/customer/qa/overview', method: 'get' })
@@ -97,6 +142,23 @@ export function fetchQaTaskDetail(taskNo: string): Promise<QaTaskDetail> {
     return task ? Promise.resolve(task) : Promise.reject(new Error('任务不存在'))
   }
   return request<QaTaskDetail>({ url: `/customer/qa/tasks/${taskNo}`, method: 'get' })
+}
+
+export function fetchQaAlerts(params: Record<string, unknown> = {}): Promise<QaAlertItem[]> {
+  if (USE_MOCK) return Promise.resolve([])
+  return request<QaAlertItem[]>({ url: '/customer/qa/alerts', method: 'get', params })
+}
+
+export function fetchSessionAlerts(sessionNo: string): Promise<QaAlertItem[]> {
+  if (USE_MOCK) return Promise.resolve([])
+  return request<QaAlertItem[]>({ url: `/customer/qa/alerts/session/${sessionNo}`, method: 'get' })
+}
+
+export const fetchSessionQaAlerts = fetchSessionAlerts
+
+export function handleQaAlert(id: string, remark: string): Promise<QaAlertItem> {
+  if (USE_MOCK) return Promise.reject(new Error('演示模式下没有实时预警'))
+  return request<QaAlertItem>({ url: `/customer/qa/alerts/${id}/handle`, method: 'post', data: { remark } })
 }
 
 export function scanQaTasks(): Promise<QaScanResult> {
@@ -186,11 +248,17 @@ export function saveQaRule(data: {
   ruleContent?: string
   weight: number
   enabled: boolean
+  realtime?: boolean
+  hitKeywords?: string | null
+  severity?: number
+  timeoutSeconds?: number
 }): Promise<QaRuleItem> {
   if (USE_MOCK) {
     const rules = mockRules()
     const item: QaRuleItem = { ...data, id: data.id || String(Date.now()),
-      ruleTypeText: ['敏感词', '承诺规范', '必答项', '情绪识别'][data.ruleType - 1] || '其他',
+      realtime: data.realtime ?? true, hitKeywords: data.hitKeywords,
+      severity: data.severity ?? 2, timeoutSeconds: data.timeoutSeconds ?? 60,
+      ruleTypeText: ['敏感词', '承诺规范', '必答项', '情绪识别', '响应超时'][data.ruleType - 1] || '其他',
       updateTime: new Date().toISOString() }
     saveRules(data.id ? rules.map((rule) => rule.id === data.id ? item : rule) : [...rules, item])
     return Promise.resolve(item)
@@ -215,10 +283,10 @@ function mockRules(): QaRuleItem[] {
   const stored = localStorage.getItem(RULES_KEY)
   if (stored !== null) return readList<QaRuleItem>(RULES_KEY)
   const rules: QaRuleItem[] = [
-    { id: '1', ruleName: '敏感词与禁语', ruleType: 1, ruleTypeText: '敏感词', ruleContent: '检查不礼貌用语', weight: 25, enabled: true },
-    { id: '2', ruleName: '服务承诺规范', ruleType: 2, ruleTypeText: '承诺规范', ruleContent: '承诺需明确时间', weight: 25, enabled: true },
-    { id: '3', ruleName: '必答项完整', ruleType: 3, ruleTypeText: '必答项', ruleContent: '核实关键信息', weight: 25, enabled: true },
-    { id: '4', ruleName: '情绪安抚', ruleType: 4, ruleTypeText: '情绪识别', ruleContent: '客户不满时先安抚', weight: 25, enabled: true },
+    { id: '1', ruleName: '敏感词与禁语', ruleType: 1, ruleTypeText: '敏感词', ruleContent: '检查不礼貌用语', weight: 25, enabled: true, realtime: true, severity: 3, timeoutSeconds: 60 },
+    { id: '2', ruleName: '服务承诺规范', ruleType: 2, ruleTypeText: '承诺规范', ruleContent: '承诺需明确时间', weight: 25, enabled: true, realtime: true, severity: 2, timeoutSeconds: 60 },
+    { id: '3', ruleName: '必答项完整', ruleType: 3, ruleTypeText: '必答项', ruleContent: '核实关键信息', weight: 25, enabled: true, realtime: false, severity: 2, timeoutSeconds: 60 },
+    { id: '4', ruleName: '情绪安抚', ruleType: 4, ruleTypeText: '情绪识别', ruleContent: '客户不满时先安抚', weight: 25, enabled: true, realtime: true, severity: 2, timeoutSeconds: 60 },
   ]
   saveRules(rules)
   return rules

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd"><mapper namespace="cn.net.susan.customer.mapper.SchemaMapper">
+
+    <select id="selectTables" resultType="java.lang.String">
+        SELECT table_name
+          FROM information_schema.tables
+         WHERE table_schema = current_schema()
+    </select>
+    <select id="selectColumns" resultType="java.lang.String">
+        SELECT table_name || '.' || column_name
+          FROM information_schema.columns
+         WHERE table_schema = current_schema()
+    </select></mapper>

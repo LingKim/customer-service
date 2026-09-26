@@ -84,17 +84,38 @@ public class PresenceController {
     public ApiResponse<Map<String, Object>> assigned(
             @RequestHeader(value = "X-Yunti-Internal-Secret", required = false) String internalSecret,
             @RequestBody AssignedBody body) {
-        if (sharedSecret == null || sharedSecret.isBlank() || internalSecret == null || internalSecret.isBlank()
-                || !MessageDigest.isEqual(sharedSecret.getBytes(StandardCharsets.UTF_8),
-                        internalSecret.getBytes(StandardCharsets.UTF_8))) {
-            throw new BizException(40301, "内部接口未授权");
-        }
+        requireInternalSecret(internalSecret);
         int delivered = handler.notifyAssigned(
                 body.tenantCode(), body.agentId(), body.sessionNo(), body.reason());
         return ApiResponse.ok(Map.of("delivered", delivered));
     }
 
+    private void requireInternalSecret(String internalSecret) {
+        if (sharedSecret == null || sharedSecret.isBlank() || internalSecret == null || internalSecret.isBlank()
+                || !MessageDigest.isEqual(sharedSecret.getBytes(StandardCharsets.UTF_8),
+                        internalSecret.getBytes(StandardCharsets.UTF_8))) {
+            throw new BizException(40301, "内部接口未授权");
+        }
+    }
+
     /** 自动接入通知请求体 */
     public record AssignedBody(String tenantCode, long agentId, String sessionNo, String reason) {
+    }
+
+    /**
+     * 内部接口：customer-service 实时质检命中后调用，把预警推给这条会话的坐席。
+     */
+    @PostMapping("/internal/qa-alert")
+    public ApiResponse<Map<String, Object>> qaAlert(
+            @RequestHeader(value = "X-Yunti-Internal-Secret", required = false) String internalSecret,
+            @RequestBody QaAlertBody body) {
+        requireInternalSecret(internalSecret);
+        int delivered = handler.notifyQaAlert(
+                body.tenantCode(), body.sessionNo(), body.agentId(), body.payload());
+        return ApiResponse.ok(Map.of("delivered", delivered));
+    }
+
+    /** 实时质检预警请求体 */
+    public record QaAlertBody(String tenantCode, String sessionNo, Long agentId, Map<String, Object> payload) {
     }
 }

@@ -145,6 +145,28 @@
               </el-button>
             </div>
           </div>
+          <div v-if="pendingQaAlerts" class="qa-banner">
+            <el-icon :size="16"><WarningFilled /></el-icon>
+            <div class="qa-banner-main">
+              <div class="qa-banner-title">
+                实时质检预警 {{ pendingQaAlerts }} 条待处理
+                <span class="qa-banner-sub">边聊边检命中规则，请按建议调整话术</span>
+              </div>
+              <div
+                v-for="alert in pendingQaAlertList.slice(0, 3)"
+                :key="alert.id"
+                class="qa-banner-row"
+              >
+                <span class="qa-sev" :class="`qa-sev-${alert.severity}`">{{ alert.severityText }}</span>
+                <span class="qa-rule">{{ alert.ruleName }}</span>
+                <span class="qa-snippet">{{ alert.advice || alert.snippet }}</span>
+                <el-button link type="primary" size="small" @click="onHandleAlert(alert)">标记已处理</el-button>
+              </div>
+              <div v-if="pendingQaAlerts > 3" class="qa-banner-more">
+                还有 {{ pendingQaAlerts - 3 }} 条，去「质检中心 → 实时预警」查看
+              </div>
+            </div>
+          </div>
           <div v-if="activeVisitorOffline" class="chat-offline">
             <el-icon :size="14"><Warning /></el-icon>
             <span>
@@ -159,12 +181,13 @@
               v-for="msg in messages"
               :key="msg.msgId"
               class="msg-row"
-              :class="msgRowClass(msg)"
+              :class="[msgRowClass(msg), { 'qa-risky': riskySeqs.has(Number(msg.seq ?? -1)) }]"
             >
               <div class="msg-bubble" :class="{ 'is-pending': msg.pending, 'is-failed': msg.failed }">
                 <div class="msg-meta">
                   {{ senderText(msg) }}
                   <span v-if="msg.visibleTo === 2" class="note-tag">内部备注</span>
+                  <span v-if="riskySeqs.has(Number(msg.seq ?? -1))" class="qa-tag">质检命中</span>
                 </div>
                 <div class="msg-content">{{ msg.content }}</div>
                 <div class="msg-time">
@@ -262,11 +285,13 @@ import {
   Search,
   Service,
   Warning,
+  WarningFilled,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElNotification } from 'element-plus'
 import { listChannels, type ChannelResult } from '../../api/customer/channel'
 import { fetchPresence } from '../../api/realtime'
 import { fetchAgentStatuses, updateAgentStatus, type AgentStatusItem } from '../../api/customer/agentStatus'
+import { fetchSessionQaAlerts, handleQaAlert, type QaAlertItem } from '../../api/customer/qa'
 import { openVisitorTestTab } from '../../utils/visitor'
 import {
   getSessionDetail,
@@ -315,6 +340,14 @@ const visitorTestChannel = ref<ChannelResult | null>(null)
 const myStatus = ref(1)
 /** 同事状态：转接选人时显示"在线 / 忙碌 / 小休" */
 const agentStatuses = ref<Record<string, AgentStatusItem>>({})
+/** 当前会话的实时质检告警（边聊边检命中后由长连接推过来） */
+const qaAlerts = ref<QaAlertItem[]>([])
+/** 还等着处理的告警数：>0 时聊天区顶部挂警示条 */
+const pendingQaAlerts = computed(() => qaAlerts.value.filter((item) => item.status === 1).length)
+/** 待处理的告警明细：警示条只展示前几条，其余引导去质检中心 */
+const pendingQaAlertList = computed(() => qaAlerts.value.filter((item) => item.status === 1))
+/** 命中告警的消息序号：气泡上标红，坐席一眼看到是哪句话 */
+const riskySeqs = computed(() => new Set(qaAlerts.value.map((item) => Number(item.messageSeq ?? -1))))
 
 /** 访客在线状态：sessionNo → 是否在线（来自长连接的上下线事件，不用刷新页面） */
 const visitorPresence = ref<Record<string, boolean>>({})
@@ -494,6 +527,58 @@ async function loadAgentStatuses() {
   }
 }
 
+/** 拉一次当前会话的实时质检告警（切会话、被派单时都补一次） */
+async function loadSessionQaAlerts(sessionNo: string) {
+  if (!sessionNo) {
+    return
+  }
+  try {
+    const rows = await fetchSessionQaAlerts(sessionNo)
+    if (activeSessionNo.value === sessionNo) {
+      qaAlerts.value = rows
+    }
+  } catch {
+    // 拿不到预警不影响接待
+  }
+}
+
+/** 长连接推来一条实时质检预警：先给反馈，再把它挂到当前会话上 */
+function onQaAlert(payload: { alert?: QaAlertItem }) {
+  const alert = payload?.alert
+  if (!alert) {
+    return
+  }
+  if (alert.sessionNo && alert.sessionNo !== activeSessionNo.value) {
+    // 不是当前会话：只提示，不往当前会话里塞
+    ElNotification({
+      title: `实时质检预警 · ${alert.severityText}`,
+      message: `${alert.ruleName}：${alert.snippet || ''}（会话 ${alert.sessionNo}）`,
+      type: alert.severity >= 3 ? 'error' : 'warning',
+      duration: 10000,
+    })
+    void loadSessions()
+    return
+  }
+  qaAlerts.value = [alert, ...qaAlerts.value.filter((item) => item.id !== alert.id)]
+  ElNotification({
+    title: `实时质检预警 · ${alert.severityText}`,
+    message: `${alert.ruleName}：${alert.snippet || ''}`,
+    type: alert.severity >= 3 ? 'error' : 'warning',
+    duration: 10000,
+  })
+}
+
+/** 坐席当场处置完，把告警标记成已处理 */
+async function onHandleAlert(alert: QaAlertItem) {
+  try {
+    const updated = await handleQaAlert(alert.id, '坐席已当场处理')
+    qaAlerts.value = qaAlerts.value.map((item) => (item.id === updated.id ? updated : item))
+    ElMessage.success('已标记处理')
+  } catch {
+    // 请求层已提示
+  }
+}
+
 /** 切换状态：路由会立刻按新状态重新分配排队会话 */
 async function changeMyStatus(status: number) {
   try {
@@ -569,6 +654,11 @@ async function handleMessage(message: RealtimeMessage) {
         scope.value = 'mine'
       }
       void loadSessions()
+      break
+    }
+    case 'QA_ALERT': {
+      // 实时质检命中：客户/客服刚发的那句话踩到规则了
+      onQaAlert((message.data ?? {}) as { alert?: QaAlertItem })
       break
     }
     case 'CONNECTED': {
@@ -736,6 +826,7 @@ async function openSession(item: SessionItem) {
   activeSessionNo.value = item.sessionNo
   activeSession.value = { ...item }
   messages.value = []
+  qaAlerts.value = []
   hasMore.value = false
   assistAgentIds.value = []
   noteMode.value = false
@@ -756,6 +847,8 @@ async function openSession(item: SessionItem) {
   }
   // 进入会话（订阅 + 拉最新历史），不会自动认领
   client?.post({ type: 'JOIN', sessionNo: item.sessionNo })
+  // 之前错过的实时预警也要能看到，所以切会话时补拉一次
+  void loadSessionQaAlerts(item.sessionNo)
 }
 
 async function loadMore() {
@@ -1888,6 +1981,19 @@ function fullTime(value?: string | null) {
   word-break: break-word;
 }
 
+/* 质检命中角标：深红底白字，蓝气泡/白气泡上都清楚 */
+.qa-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
 .is-customer .msg-content {
   color: #fff;
 }
@@ -1944,5 +2050,66 @@ function fullTime(value?: string | null) {
   font-size: 13px;
   color: #64748b;
   margin-bottom: 14px;
+}
+
+/* 实时质检警示条：命中规则当场挂出来，坐席不处理就一直提醒 */
+.qa-banner {
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #fff7ed;
+  border-top: 1px solid #fed7aa;
+  border-bottom: 1px solid #fed7aa;
+  color: #9a3412;
+}
+
+.qa-banner-main { flex: 1; min-width: 0; }
+.qa-banner-title { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.qa-banner-sub { font-weight: 400; color: #b45309; margin-left: 8px; }
+
+.qa-banner-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.qa-banner-row .el-button {
+  flex: none;
+}
+
+.qa-sev {
+  flex: none;
+  margin-top: 1px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #fff;
+  background: #f59e0b;
+}
+
+.qa-sev-3 { background: #dc2626; }
+.qa-sev-1 { background: #64748b; }
+.qa-rule { flex: none; font-weight: 600; }
+
+/* 处置建议可能比较长（比如超时提醒），允许折成两行，别截成看不清的半句 */
+.qa-snippet {
+  flex: 1;
+  min-width: 0;
+  color: #92400e;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.qa-banner-more { font-size: 12px; color: #b45309; margin-top: 4px; }
+
+/* 命中的那条消息：只加一圈红边，不动底色
+   —— 访客气泡是蓝底白字，改底色会把白字压成看不清 */
+.msg-row.qa-risky .msg-bubble {
+  box-shadow: 0 0 0 2px #f87171;
 }
 </style>
